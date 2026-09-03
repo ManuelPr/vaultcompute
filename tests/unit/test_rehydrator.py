@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from blindfold.core.lineage import Lineage, Policy, VaultRecord
 from blindfold.core.policy import SessionBoundPolicy
-from blindfold.core.rehydrator import TOKEN_PATTERN, rehydrate
+from blindfold.core.rehydrator import PLACEHOLDER_PROMPT, TOKEN_PATTERN, rehydrate
 from blindfold.core.vault import MemoryTokenStore
 from blindfold.ports.token_store import TokenStore
 
@@ -33,6 +33,13 @@ def test_regex_matches_valid_and_rejects_invalid():
     assert not TOKEN_PATTERN.fullmatch("⟦tok_gggggggg⟧")  # 'g' not hex
     assert not TOKEN_PATTERN.fullmatch("⟦tok_deadbeefdead⟧")  # neither width
     assert not TOKEN_PATTERN.fullmatch("(tok_deadbeef)")
+
+
+def test_placeholder_prompt_forbids_adaptive_probing():
+    lowered = PLACEHOLDER_PROMPT.lower()
+    assert "binary search" in lowered
+    assert "deliberate errors" in lowered
+    assert "token cloning" in lowered
 
 
 def test_rehydrate_happy_path():

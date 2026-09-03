@@ -10,6 +10,10 @@ class SandboxError(Exception):
     """Raised by ComputeSandbox implementations on timeout, parse, or exec failure."""
 
 
+class SandboxTimeoutError(SandboxError):
+    """The computation exceeded its public execution budget."""
+
+
 class ComputeSandbox(ABC):
     @abstractmethod
     def run(self, code: str, inputs: dict[str, Any], timeout_s: float) -> Any: ...

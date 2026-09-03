@@ -213,7 +213,8 @@ def test_declared_path_that_no_longer_matches_stops_instead_of_passing_through(
     finally:
         store.close()
     assert out["continue"] is False
-    assert "declared protected paths" in out["stopReason"]
+    assert "missing required protected path" in out["stopReason"]
+    assert "$.salary" in out["stopReason"]
     assert "71000" not in out["stopReason"]
 
 

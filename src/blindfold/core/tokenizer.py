@@ -79,6 +79,7 @@ class SchemaField:
     path: str
     semantic_type: str | None = None
     unit: str | None = None
+    required: bool = False
 
     def __post_init__(self) -> None:
         validate_path(self.path)

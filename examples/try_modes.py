@@ -25,13 +25,12 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from blindfold import PLACEHOLDER_PROMPT, rehydrate
+from blindfold import BlindfoldSession
 from blindfold.config import (
     ComputeConfig,
     load_config,
@@ -39,7 +38,7 @@ from blindfold.config import (
     table_schemas_for,
 )
 from blindfold.core.policy import SessionBoundPolicy
-from blindfold.core.tokenizer import describe_schema, describe_tables, tokenize_result
+from blindfold.core.tokenizer import describe_schema, describe_tables
 from blindfold.core.vault import MemoryTokenStore
 from blindfold.sandbox.subprocess_ import SubprocessSandbox
 from blindfold.tools import blindfold_compute, blindfold_table
@@ -159,8 +158,8 @@ async def mode_a(config_path: Path) -> None:
 async def mode_b(config_path: Path) -> None:
     head("MODE B — in-process library.  from blindfold import ...")
     print(
-        "\nNo proxy. This is the agent loop you already have, with five calls\n"
-        "added. The 'model' below is scripted so no API key is needed."
+        "\nNo proxy. This is the agent loop you already have, using the safe\n"
+        "BlindfoldSession façade. The 'model' is scripted; no API key is needed."
     )
 
     config = load_config(config_path)
@@ -169,7 +168,9 @@ async def mode_b(config_path: Path) -> None:
     config = config.model_copy(update={"compute": ComputeConfig(mode="python_unsafe")})
     store, policy, sandbox = MemoryTokenStore(), SessionBoundPolicy(), SubprocessSandbox()
     session_id = f"user_{uuid.uuid4().hex[:8]}"
-    ttl = datetime.now(tz=timezone.utc) + timedelta(hours=1)
+    blindfold_session = BlindfoldSession(
+        config, session_id=session_id, store=store, policy=policy
+    )
 
     params = StdioServerParameters(
         command=sys.executable, args=["-m", "examples.fake_hr_mcp"], env=ENV
@@ -178,8 +179,8 @@ async def mode_b(config_path: Path) -> None:
         async with ClientSession(read, write) as session:
             await session.initialize()
 
-            step("1", "Put PLACEHOLDER_PROMPT in your system prompt")
-            show("first line", PLACEHOLDER_PROMPT.splitlines()[0])
+            step("1", "Use the model instructions owned by BlindfoldSession")
+            show("first line", blindfold_session.model_instructions.splitlines()[0])
 
             step("2+3", "Explicitly opt into python_unsafe and advertise compute tools")
             listed = await session.list_tools()
@@ -197,21 +198,17 @@ async def mode_b(config_path: Path) -> None:
             ]
             show("tools passed to the LLM", [t["name"] for t in tools])
 
-            step("4", "Tokenize every tool result before feeding it back")
+            step("4", "Protect every tool result before feeding it back")
             call = await session.call_tool("get_salary", {"name": "Manuel Pernigotto"})
             payload = json.loads(call.content[0].text)
             show("what the tool really returned", payload)
-            tokenized = tokenize_result(
-                payload, "get_salary", schema_fields_for(config, "get_salary"),
-                store, session_id, ttl, tables=table_schemas_for(config, "get_salary"),
-            )
+            tokenized = blindfold_session.protect_tool_result("get_salary", payload)
             show("what you feed the model", tokenized)
             manuel = tokenized["salary"]
 
             call = await session.call_tool("get_salary", {"name": "Andrea Tuscano"})
-            andrea = tokenize_result(
-                json.loads(call.content[0].text), "get_salary",
-                schema_fields_for(config, "get_salary"), store, session_id, ttl,
+            andrea = blindfold_session.protect_tool_result(
+                "get_salary", json.loads(call.content[0].text)
             )["salary"]
 
             step("5a", "Route the model's compute call")
@@ -228,10 +225,11 @@ async def mode_b(config_path: Path) -> None:
             step("5b", "Rehydrate before display — this is the step Mode A cannot do")
             answer = f"{derived} earns more: {andrea} against {manuel}."
             show("the model wrote", answer)
-            show("the user reads", rehydrate(answer, session_id, store, policy))
+            show("the user reads", blindfold_session.render_final_answer(answer))
 
             step("!", "A different user cannot resolve those placeholders")
-            show("another session reads", rehydrate(answer, "someone_else", store, policy))
+            other = BlindfoldSession(config, session_id="someone_else", store=store, policy=policy)
+            show("another session reads", other.render_final_answer(answer))
 
 
 # --------------------------------------------------------------------------

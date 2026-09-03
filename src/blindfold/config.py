@@ -16,7 +16,7 @@ import fnmatch
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from blindfold.core.lineage import Column, TableSchema
 from blindfold.core.rehydrator import PLACEHOLDER_PROMPT
@@ -32,6 +32,7 @@ class SensitiveFieldConfig(StrictConfigModel):
     path: str
     semantic_type: str | None = None
     unit: str | None = None
+    required: bool = True
 
     @field_validator("path")
     @classmethod
@@ -59,6 +60,7 @@ class TableConfig(StrictConfigModel):
 
     path: str
     columns: list[ColumnConfig]
+    required: bool = True
 
     @field_validator("path")
     @classmethod
@@ -129,14 +131,15 @@ class ComputeConfig(StrictConfigModel):
     #: exposes arbitrary Python and must be a deliberate opt-in. ``disabled``
     #: exposes neither compute surface.
     mode: str = "controlled"
-    #: A token used as `blindfold_compute` input more than this many times
-    #: within `rate_window_s` is refused for the rest of the window. Bounds
+    #: A root secret lineage used by `blindfold_compute` more than this many
+    #: times within `rate_window_s` is refused for the rest of the window. Every
+    #: reserved attempt counts, including failures and timeouts. Bounds
     #: how fast the tool's success/failure side channel (see LIMITATIONS.md,
     #: "Blind compute answers one bit per call") can extract an exact value
     #: through repeated threshold probes, without capping legitimate reuse of
-    #: the same token spread naturally across a session. 0 disables the check.
-    max_calls_per_token: int = 8
-    rate_window_s: int = 60
+    #: the same secret lineage spread naturally across a session. 0 disables the check.
+    max_calls_per_token: int = Field(default=8, ge=0)
+    rate_window_s: int = Field(default=60, gt=0)
 
     @field_validator("mode")
     @classmethod
@@ -275,9 +278,21 @@ def schema_fields_for(config: BlindfoldConfig, tool_name: str) -> list[SchemaFie
     if tool is None:
         return []
     return [
-        SchemaField(path=f.path, semantic_type=f.semantic_type, unit=f.unit)
+        SchemaField(
+            path=f.path,
+            semantic_type=f.semantic_type,
+            unit=f.unit,
+            required=f.required,
+        )
         for f in tool.sensitive_fields
     ]
+
+
+def required_table_paths_for(config: BlindfoldConfig, tool_name: str) -> set[str]:
+    tool = config.schemas.get(tool_name)
+    if tool is None:
+        return set()
+    return {table.path for table in tool.tables if table.required}
 
 
 def table_schemas_for(config: BlindfoldConfig, tool_name: str) -> list[tuple[str, TableSchema]]:
@@ -320,6 +335,11 @@ def schema_fields_for_resource(config: BlindfoldConfig, uri: str) -> list[Schema
                 continue
             kept.append(segments)
             merged.append(
-                SchemaField(path=field.path, semantic_type=field.semantic_type, unit=field.unit)
+                SchemaField(
+                    path=field.path,
+                    semantic_type=field.semantic_type,
+                    unit=field.unit,
+                    required=field.required,
+                )
             )
     return merged

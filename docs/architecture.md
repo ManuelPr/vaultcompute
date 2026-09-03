@@ -76,31 +76,33 @@ So Mode A is the right shape when hiding values from the provider is the whole g
 
 ### Mode B: In-process library — `from blindfold import ...`
 
-This is the reference integration for apps that call LLMs directly. The
-application owns input tokenization, authorization and final rehydration. For
+This is the reference integration for apps that call LLMs directly. A
+`BlindfoldSession` owns tokenization, session identity, policy, TTL and final
+rehydration. For
 structured lists it can issue a trusted-side `TableQueryCapability` binding one
 exact table/session/query/expiry to the user's authorized request; the model
 cannot change a threshold or operation without being refused.
 
 ```python
-from blindfold import rehydrate
-from blindfold.core.vault import MemoryTokenStore
-from blindfold.core.policy import SessionBoundPolicy
-from blindfold.core.tokenizer import tokenize_result, SchemaField
-from blindfold.tools.blindfold_table import build_tool_definition, handle_blindfold_table
+from blindfold import BlindfoldSession
+from blindfold.config import load_config
 
-store = MemoryTokenStore()
-policy = SessionBoundPolicy()
-session_id = f"user_{user_uuid}"
-fields = [SchemaField(path="$.salary", semantic_type="salary", unit="EUR/year")]
+session = BlindfoldSession(
+    load_config("blindfold.yaml"), session_id=f"user_{user_uuid}"
+)
 ```
 
 Four integration points in your loop:
 
-1. **Advertise `blindfold_table` to the model.** Add `build_tool_definition()` to the tools list you pass to the LLM SDK when a protected result includes a declared table.
-2. **Tokenize every real tool result.** When the model calls one of your normal tools, run `tokenize_result(payload, tool_name, fields, store, session_id, ttl)` on the response before feeding it back as `tool_result`.
-3. **Authorize and route controlled queries.** Translate the user's authorized request into an exact, short-lived `TableQueryCapability`, then call `handle_blindfold_table(..., capability=capability, require_capability=True)`. A changed table, operation, literal or session is rejected.
-4. **Rehydrate before display.** When the model produces its final text, call `rehydrate(final_text, session_id, store, policy)` and print that.
+1. **Brief the model.** Add `session.model_instructions` to the system prompt.
+2. **Protect every real tool result.** Prefer `session.call_protected_tool(...)`, which returns only the protected copy, or call `protect_tool_result(...)` immediately after an async/framework-owned invocation.
+3. **Authorize and route controlled queries.** Translate the user's authorized request into an exact, short-lived `TableQueryCapability`, then call `session.execute_authorized_query(..., capability=capability)`. A changed table, operation, literal or session is rejected.
+4. **Rehydrate before display.** Call `session.render_final_answer(final_text)` only at the user-visible boundary.
+
+The façade refuses unknown tools, absent required paths and declared tables of
+the wrong shape before it writes anything to the vault. A path that is truly
+optional must say `required: false` in configuration. Low-level primitives
+remain available for advanced integrations.
 
 Framework-agnostic, LLM-agnostic. Works with any provider that supports tool use / function calling. See [`examples/demo_chat.py`](../examples/demo_chat.py) for a deliberately unsafe compute example against the Anthropic SDK — swapping in OpenAI or Gemini is a matter of changing the SDK client and the tool_result payload shape.
 
@@ -270,13 +272,19 @@ The heart of Blindfold's schema-driven approach:
 1. Deep-copies the payload (never mutates the original).
 2. For each `SchemaField(path, semantic_type, unit)` from the config, walks the JSONPath against the copy.
 3. For each match: mints a token, builds a `VaultRecord` with `_infer_dtype(value)` (`bool`/`int`/`float`/`str` → `boolean`/`number`/`string`; anything else → `object`), calls `store.put`, then replaces the value in the tree with the token string.
+
+[`core/protection.py`](../src/blindfold/core/protection.py) is the single
+fail-closed entry above that low-level tokenizer. It validates every required
+field and table across the decoded result parts before writing to the vault.
+Mode B, the MCP proxy, and the Claude/Codex adapters all call this same entry;
+their remaining code only translates their transport-specific result shapes.
 4. Returns the mutated copy.
 
 The JSONPath dialect is intentionally minimal at MVP, though not as minimal as this document previously claimed: static keys (`$.a.b`), list wildcards at any depth including nested ones (`$.a[*].b[*].c` descends correctly — `_walk` recurses), and explicit numeric indices (`$.items[0].name`). No filters, no recursive descent (`$..salary`), no slicing — see [`LIMITATIONS.md`](../LIMITATIONS.md).
 
 **Paths that don't match are no-ops.** Declare paths defensively — the cost is zero and it protects against unexpected response shapes.
 
-**Paths that could never match are refused.** `validate_path` runs wherever a `SchemaField` is created: from `blindfold.yaml` through a Pydantic validator on `SensitiveFieldConfig`, and inside the dataclass itself so Mode B is covered without the YAML. It rejects recursive descent, filters, slices, quoted keys and unbalanced brackets — all of which the walker would otherwise reinterpret rather than honor, `$..salary` quietly becoming `$.salary`. The two behaviors are deliberately different: "did not match this response" is intended, "cannot mean what you wrote" is a configuration bug and fails at startup.
+**Paths that could never match are refused.** `validate_path` runs wherever a `SchemaField` is created: from `blindfold.yaml` through a Pydantic validator on `SensitiveFieldConfig`, and inside the dataclass itself so Mode B is covered without the YAML. It rejects recursive descent, filters, slices, quoted keys and unbalanced brackets — all of which the walker would otherwise reinterpret rather than honor, `$..salary` quietly becoming `$.salary`. The low-level tokenizer keeps non-matching paths as no-ops for compatibility; `BlindfoldSession` instead refuses a missing path unless it is explicitly declared `required: false`.
 
 ### Rehydrator — [`src/blindfold/core/rehydrator.py`](../src/blindfold/core/rehydrator.py)
 
@@ -328,18 +336,18 @@ bypassing a rate limit attached to the original token.
 The MCP tool the LLM actually calls. Two exports:
 
 - `build_tool_definition()` — returns the tool spec (name, description, JSON schema for `code` + `inputs`). The description teaches the model the protocol: "every token you resolve must be listed in `inputs`; assign to `result`; result must be JSON-serializable; you get back a new token, not a value".
-- `handle_blindfold_compute(args, *, store, policy, sandbox, session_id, ttl_seconds, max_calls_per_token, rate_window_s)` — the orchestrator:
+- `handle_blindfold_compute(args, *, store, policy, sandbox, session_id, ttl_seconds, max_calls_per_token, rate_window_s)` — the cooperative-model orchestrator:
   1. Validate `args` shape.
   2. For each input token: fetch the record, run `policy.can_compute` — reject on failure.
-  3. **Rate check**: for each input token, count how many `blind_compute` records already in the vault (for this session, within the last `rate_window_s` seconds) list it in `lineage.inputs`. Refuse if any token is at or past `max_calls_per_token` — no new counter, just a scan over records already being written.
+  3. Walk each input's lineage to its original secrets and atomically reserve one attempt in the vault. Each root shares its budget with every derived token; failed and timed-out executions still consume it.
   4. Build `{token: value}` dict.
   5. Call the sandbox.
   6. Mint a new record with `lineage.op="blind_compute"`, `lineage.inputs=tuple(inputs)`, `lineage.code_digest=sha256(code)`, `policy=compose_policy([...])`, `ttl=compose_ttl([...])`.
-  7. Return the new token.
+  7. Mark the attempt succeeded (or failed/timed out on the exception paths) and return the new token.
 
 The composed policy and TTL are why the model cannot launder sensitive data through a computation: derived tokens are at least as restricted as their most restrictive input.
 
-**Why the rate check is a window, not a lifetime count:** the same token legitimately shows up as compute input many times across a real session — the same salary compared against different thresholds, hours apart. A flat cap on total reuse would break that on the first ordinary session that used a value more than a couple of times. A *rate* limit lets spread-out reuse through untouched while catching a burst — which is what the one-bit oracle in [`LIMITATIONS.md`](../LIMITATIONS.md#blind-compute-answers-one-bit-per-call-whatever-the-sandbox) actually looks like: many calls, same token, close together. It does not close the channel — a patient attacker still gets there at one probe per window — but it turns a silent, instant extraction into a slow one with an unmistakable pattern already sitting in the vault's own lineage data. Wired into both callers that reach this handler — `mcp_server.compute()` (Mode C) and `proxy._handle_blindfold_compute` (Mode A) — from the same `config.compute` values, so the limit does not depend on which mode is running.
+**Why the rate check is a window, not a lifetime count:** the same secret legitimately shows up many times across a real session. A flat cap would eventually break ordinary use. A window catches a burst while permitting later reuse. Reservations live in a metadata-only attempt ledger, happen before the sandbox, and are atomic in both stores (SQLite uses a write transaction across processes). `blindfold audit` summarizes outcomes and flags blocked bursts. This does not close the channel — a patient attacker can continue across windows — so the prompt and tool description also state the cooperative-model rule explicitly.
 
 ### Config — [`src/blindfold/config.py`](../src/blindfold/config.py)
 

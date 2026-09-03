@@ -9,6 +9,8 @@ against the vault.
 import json
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from blindfold.audit import MIN_INTERESTING, audit, read_transcript, session_ids_in
 from blindfold.core.lineage import Lineage, Policy, VaultRecord
 from blindfold.core.vault import MemoryTokenStore
@@ -106,6 +108,39 @@ def test_a_vault_with_records_but_no_placeholders_says_so():
     store, _ = _store_with("Andrea Tuscano")
     report = audit("an unrelated conversation", store, SESSION)
     assert "wrong transcript" in report.render()
+
+
+def test_audit_reports_compute_attempts_and_rate_limit_blocks():
+    store, [token] = _store_with(71000)
+    expires = datetime.now(tz=timezone.utc) + timedelta(hours=1)
+    for index in range(2):
+        attempt_id = store.reserve_compute_attempt(
+            session_id=SESSION,
+            root_tokens=(token,),
+            input_tokens=(token,),
+            code_digest=str(index),
+            expires_at=expires,
+            max_attempts=2,
+            window_s=60,
+        )
+        store.finish_compute_attempt(attempt_id, "failed")
+    with pytest.raises(ValueError, match="rate limit"):
+        store.reserve_compute_attempt(
+            session_id=SESSION,
+            root_tokens=(token,),
+            input_tokens=(token,),
+            code_digest="blocked",
+            expires_at=expires,
+            max_attempts=2,
+            window_s=60,
+        )
+
+    report = audit(token, store, SESSION)
+    assert report.compute_attempts == 3
+    assert report.compute_outcomes == {"failed": 2, "blocked": 1}
+    assert report.suspicious_compute
+    assert not report.passed
+    assert "SUSPICIOUS COMPUTE" in report.render()
 
 
 # --- blind_compute results that coincide with public text -----------------

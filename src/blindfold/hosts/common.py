@@ -7,14 +7,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from blindfold.config import BlindfoldConfig, schema_fields_for, table_schemas_for
-from blindfold.core.tokenizer import tokenize_result
+from blindfold.config import (
+    BlindfoldConfig,
+    required_table_paths_for,
+    schema_fields_for,
+    table_schemas_for,
+)
+from blindfold.core.protection import protect_result
+from blindfold.errors import ProtectionError
 from blindfold.ports.token_store import TokenStore
-
-
-class ProtectionError(ValueError):
-    """A configured result cannot be transformed without risking disclosure."""
-
 
 @dataclass(frozen=True)
 class ProtectedPayload:
@@ -38,26 +39,24 @@ def protect_payload(
 ) -> ProtectedPayload:
     """Tokenize a decoded JSON value and require the declaration to match.
 
-    A configured path matching nothing is dangerous at a host boundary: it can
-    mean the upstream tool changed shape and moved the value somewhere that is
-    now passing through in cleartext. The lower-level tokenizer intentionally
-    permits optional fields; host adapters use this stricter contract because
-    they are the last stop before the model.
+    A required path matching nothing can mean the upstream tool changed shape
+    and moved a value somewhere that now passes through in cleartext. The
+    shared protection kernel rejects that drift before this host-specific
+    adapter reconstructs its output shape.
     """
     fields = schema_fields_for(config, tool_name)
     tables = table_schemas_for(config, tool_name)
     ttl = datetime.now(tz=UTC) + timedelta(seconds=config.tokens.default_ttl)
-    tokenized = tokenize_result(
+    tokenized = protect_result(
         payload,
-        tool_name,
-        fields,
-        store,
-        session_id,
-        ttl,
+        source_name=tool_name,
+        fields=fields,
         tables=tables,
+        required_table_paths=required_table_paths_for(config, tool_name),
+        store=store,
+        session_id=session_id,
+        ttl=ttl,
     )
-    if tokenized == payload:
-        raise ProtectionError("none of the declared protected paths matched the result")
     return ProtectedPayload(
         value=tokenized, text=json.dumps(tokenized, ensure_ascii=False)
     )

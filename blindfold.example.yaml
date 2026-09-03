@@ -7,6 +7,8 @@ schemas:
       - path: $.salary
         semantic_type: salary
         unit: EUR/year
+        # Paths are required by BlindfoldSession unless explicitly disabled.
+        # required: false
 
   # A list the model gets as ONE token, however long it is. The declared
   # columns are what it may query on with blindfold_table — declare a column
@@ -14,6 +16,7 @@ schemas:
   # hr_api.list_employees:
   #   tables:
   #     - path: $.employees
+  #       # required: false  # only if successful responses may omit the table
   #       columns:
   #         - name: salary
   #           semantic_type: salary
@@ -38,8 +41,11 @@ compute:
   # cooperative model and is never selected implicitly.
   mode: controlled
 
-  # Defense in depth for python_unsafe; it slows the success/failure oracle but
-  # cannot close it. 0 disables the rate check.
+  # Defense in depth for python_unsafe. The limit is shared by a root secret and
+  # every token derived from it; successes, failures and timeouts all count.
+  # Reservations are atomic in SQLite and blocked bursts appear in audit. This
+  # slows the oracle but cannot stop a patient model across windows. 0 disables
+  # refusal while retaining attempt logging.
   max_calls_per_token: 8
   rate_window_s: 60
 

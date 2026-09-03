@@ -34,12 +34,18 @@ from __future__ import annotations
 import base64
 import json
 import os
+import secrets
 import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from blindfold.core.compute_attempts import (
+    ATTEMPT_OUTCOMES,
+    ComputeAttempt,
+    ComputeRateLimitError,
+)
 from blindfold.core.lineage import Column, Lineage, Policy, TableSchema, VaultRecord
 from blindfold.ports.token_store import TokenStore
 
@@ -60,6 +66,22 @@ CREATE TABLE IF NOT EXISTS records (
 );
 CREATE INDEX IF NOT EXISTS idx_records_session ON records(session_id);
 CREATE INDEX IF NOT EXISTS idx_records_ttl ON records(ttl_epoch);
+CREATE TABLE IF NOT EXISTS compute_attempts (
+    attempt_id   TEXT PRIMARY KEY,
+    session_id   TEXT NOT NULL,
+    root_tokens  TEXT NOT NULL,   -- JSON
+    input_tokens TEXT NOT NULL,   -- JSON
+    created_at   TEXT NOT NULL,
+    created_epoch REAL NOT NULL,
+    expires_at   TEXT NOT NULL,
+    expires_epoch REAL NOT NULL,
+    code_digest  TEXT NOT NULL,
+    outcome      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_compute_attempts_session_time
+    ON compute_attempts(session_id, created_epoch);
+CREATE INDEX IF NOT EXISTS idx_compute_attempts_expiry
+    ON compute_attempts(expires_epoch);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
@@ -237,7 +259,104 @@ class SQLiteTokenStore(TokenStore):
         cutoff = (now if now is not None else self._now()).timestamp()
         with self._lock:
             cur = self._conn.execute("DELETE FROM records WHERE ttl_epoch <= ?", (cutoff,))
+            self._conn.execute(
+                "DELETE FROM compute_attempts WHERE expires_epoch <= ?", (cutoff,)
+            )
             return cur.rowcount
+
+    def reserve_compute_attempt(
+        self,
+        *,
+        session_id: str,
+        root_tokens: tuple[str, ...],
+        input_tokens: tuple[str, ...],
+        code_digest: str,
+        expires_at: datetime,
+        max_attempts: int,
+        window_s: int,
+    ) -> str:
+        attempt_id = f"attempt_{secrets.token_hex(16)}"
+        now = self._now()
+        roots = tuple(sorted(set(root_tokens)))
+        blocked_count = 0
+        blocked = False
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = self._conn.execute(
+                    "SELECT root_tokens FROM compute_attempts "
+                    "WHERE session_id = ? AND created_epoch >= ? AND outcome != 'blocked'",
+                    (session_id, now.timestamp() - window_s),
+                ).fetchall()
+                recent_roots = [tuple(json.loads(row["root_tokens"])) for row in rows]
+                for root in roots:
+                    blocked_count = max(
+                        blocked_count,
+                        sum(1 for attempt_roots in recent_roots if root in attempt_roots),
+                    )
+                blocked = max_attempts > 0 and blocked_count >= max_attempts
+                self._conn.execute(
+                    "INSERT INTO compute_attempts "
+                    "(attempt_id, session_id, root_tokens, input_tokens, created_at, "
+                    " created_epoch, expires_at, expires_epoch, code_digest, outcome) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        attempt_id,
+                        session_id,
+                        json.dumps(roots),
+                        json.dumps(tuple(input_tokens)),
+                        now.isoformat(),
+                        now.timestamp(),
+                        expires_at.isoformat(),
+                        expires_at.timestamp(),
+                        code_digest,
+                        "blocked" if blocked else "started",
+                    ),
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                if self._conn.in_transaction:
+                    self._conn.execute("ROLLBACK")
+                raise
+        if blocked:
+            raise ComputeRateLimitError(
+                recent_count=blocked_count,
+                max_attempts=max_attempts,
+                window_s=window_s,
+            )
+        return attempt_id
+
+    def finish_compute_attempt(self, attempt_id: str, outcome: str) -> None:
+        if outcome not in ATTEMPT_OUTCOMES or outcome in ("started", "blocked"):
+            raise ValueError(f"invalid terminal compute outcome: {outcome!r}")
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE compute_attempts SET outcome = ? WHERE attempt_id = ?",
+                (outcome, attempt_id),
+            )
+            if cur.rowcount != 1:
+                raise KeyError(f"unknown compute attempt: {attempt_id}")
+
+    def find_compute_attempts(self, session_id: str) -> list[ComputeAttempt]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM compute_attempts "
+                "WHERE session_id = ? AND expires_epoch > ? ORDER BY created_epoch",
+                (session_id, self._now().timestamp()),
+            ).fetchall()
+        return [
+            ComputeAttempt(
+                attempt_id=row["attempt_id"],
+                session_id=row["session_id"],
+                root_tokens=tuple(json.loads(row["root_tokens"])),
+                input_tokens=tuple(json.loads(row["input_tokens"])),
+                created_at=datetime.fromisoformat(row["created_at"]),
+                expires_at=datetime.fromisoformat(row["expires_at"]),
+                code_digest=row["code_digest"],
+                outcome=row["outcome"],
+            )
+            for row in rows
+        ]
 
     # --- housekeeping -----------------------------------------------------
 

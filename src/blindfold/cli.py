@@ -179,7 +179,8 @@ def run_mcp_server(argv: list[str]) -> int:
 def run_audit(argv: list[str]) -> int:
     """Answer "is it actually working" from the transcript, not the screen.
 
-    Exits non-zero when a hidden value is found, so it can gate a pipeline.
+    Exits non-zero when a hidden value or blocked probing burst is found, so it
+    can gate a pipeline.
     """
     parser = argparse.ArgumentParser(prog="blindfold audit", usage=USAGE)
     parser.add_argument("transcript", type=Path)
@@ -208,7 +209,7 @@ def run_audit(argv: list[str]) -> int:
                 print(f"\n--- session {session} ---")
             report = audit_mod.audit(text, store, session)
             print(report.render())
-            clean = clean and report.clean
+            clean = clean and report.passed
     finally:
         close = getattr(store, "close", None)
         if close is not None:

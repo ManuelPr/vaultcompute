@@ -26,13 +26,16 @@ from blindfold.config import (
     BlindfoldConfig,
     build_token_store,
     load_config,
+    required_table_paths_for,
     schema_fields_for,
     schema_fields_for_resource,
     table_schemas_for,
 )
 from blindfold.core.policy import SessionBoundPolicy
+from blindfold.core.protection import protect_result, protect_results
 from blindfold.core.rehydrator import rehydrate
-from blindfold.core.tokenizer import describe_schema, describe_tables, tokenize_result
+from blindfold.core.tokenizer import describe_schema, describe_tables
+from blindfold.errors import ProtectionError
 from blindfold.ports.policy import DetokenizePolicy
 from blindfold.ports.sandbox import ComputeSandbox, SandboxError
 from blindfold.ports.token_store import TokenStore
@@ -315,18 +318,30 @@ def _tokenize_tool_call_result(msg: dict, tool_name: str, state: ProxyState) -> 
         raise ProxyProtectionError("protected tool returned no content")
     now = datetime.now(tz=timezone.utc)
     ttl = now + timedelta(seconds=state.ttl_seconds)
-    matched = False
-    for i, part in enumerate(content):
+    payloads = []
+    for part in content:
         if not isinstance(part, dict) or part.get("type") != "text":
             raise ProxyProtectionError("protected tool returned a non-text content part")
         try:
-            payload = json.loads(part.get("text", ""))
+            payloads.append(json.loads(part.get("text", "")))
         except json.JSONDecodeError:
             raise ProxyProtectionError("protected tool returned text that is not JSON") from None
-        tokenized = tokenize_result(
-            payload, tool_name, fields, state.store, state.session_id, ttl, tables=tables
+
+    try:
+        protected = protect_results(
+            payloads,
+            source_name=tool_name,
+            fields=fields,
+            tables=tables,
+            required_table_paths=required_table_paths_for(state.config, tool_name),
+            store=state.store,
+            session_id=state.session_id,
+            ttl=ttl,
         )
-        matched = matched or tokenized != payload
+    except ProtectionError as exc:
+        raise ProxyProtectionError(str(exc)) from None
+
+    for i, (part, tokenized) in enumerate(zip(content, protected, strict=True)):
         # ensure_ascii=False, and it is not cosmetic: this text is what the
         # model reads. Escaped, it sees the characters ⟦tok_…⟧ and
         # may copy that form into its answer, which the rehydrator's regex
@@ -334,8 +349,6 @@ def _tokenize_tool_call_result(msg: dict, tool_name: str, state: ProxyState) -> 
         replacement = dict(part)
         replacement["text"] = json.dumps(tokenized, ensure_ascii=False)
         content[i] = replacement
-    if not matched:
-        raise ProxyProtectionError("none of the declared protected paths matched the tool result")
 
 
 def _tokenize_resource_read(msg: dict, requested_uri: str, state: ProxyState) -> None:
@@ -373,9 +386,19 @@ def _tokenize_resource_read(msg: dict, requested_uri: str, state: ProxyState) ->
                 file=sys.stderr,
             )
             raise ProxyProtectionError("protected resource returned text that is not JSON") from None
-        tokenized = tokenize_result(payload, uri, fields, state.store, state.session_id, ttl)
-        if tokenized == payload:
-            raise ProxyProtectionError("none of the declared protected paths matched the resource")
+        try:
+            tokenized = protect_result(
+                payload,
+                source_name=uri,
+                fields=fields,
+                tables=[],
+                required_table_paths=set(),
+                store=state.store,
+                session_id=state.session_id,
+                ttl=ttl,
+            )
+        except ProtectionError as exc:
+            raise ProxyProtectionError(str(exc)) from None
         matched = True
         part["text"] = json.dumps(tokenized, ensure_ascii=False)
     if schema_fields_for_resource(state.config, requested_uri) and not matched:

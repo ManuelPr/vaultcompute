@@ -5,7 +5,8 @@ import pytest
 from blindfold.core.lineage import Lineage, Policy, VaultRecord
 from blindfold.core.policy import SessionBoundPolicy
 from blindfold.core.vault import MemoryTokenStore
-from blindfold.ports.sandbox import SandboxError
+from blindfold.core.compute_attempts import ComputeRateLimitError
+from blindfold.ports.sandbox import SandboxError, SandboxTimeoutError
 from blindfold.sandbox.subprocess_ import SubprocessSandbox
 from blindfold.tools.blindfold_compute import (
     BLINDFOLD_COMPUTE_TOOL_NAME,
@@ -42,6 +43,8 @@ def test_tool_definition_shape():
     assert set(schema["required"]) == {"code", "inputs"}
     assert schema["properties"]["code"]["type"] == "string"
     assert schema["properties"]["inputs"]["type"] == "array"
+    assert "cooperative-model" in spec["description"].lower()
+    assert "adaptive comparisons" in spec["description"].lower()
 
 
 def test_handler_happy_path_returns_token_and_stores_record():
@@ -216,3 +219,101 @@ def test_zero_disables_the_limit():
     _put(store, "⟦tok_00000001⟧", 71000)
     for i in range(20):
         _compute(store, "⟦tok_00000001⟧", threshold=i, max_calls_per_token=0)
+    assert len(store.find_compute_attempts("s")) == 20
+
+
+@pytest.mark.parametrize(
+    "max_calls, window_s",
+    [(-1, 60), (8, 0), (8, -1)],
+)
+def test_direct_library_calls_reject_invalid_rate_ranges(max_calls, window_s):
+    store = MemoryTokenStore()
+    _put(store, "⟦tok_00000001⟧", 71000)
+    with pytest.raises(ValueError, match="rate limit requires"):
+        handle_blindfold_compute(
+            {"code": "result = 1", "inputs": ["⟦tok_00000001⟧"]},
+            store=store,
+            policy=SessionBoundPolicy(),
+            sandbox=SubprocessSandbox(),
+            session_id="s",
+            ttl_seconds=3600,
+            max_calls_per_token=max_calls,
+            rate_window_s=window_s,
+        )
+
+
+class _FailingSandbox:
+    def run(self, code, inputs, timeout_s):
+        raise SandboxError("deliberate failure")
+
+
+class _TimeoutSandbox:
+    def run(self, code, inputs, timeout_s):
+        raise SandboxTimeoutError("deliberate timeout")
+
+
+def _failing_compute(store, sandbox, *, max_calls_per_token=2):
+    return handle_blindfold_compute(
+        {"code": "raise ValueError()", "inputs": ["⟦tok_00000001⟧"]},
+        store=store,
+        policy=SessionBoundPolicy(),
+        sandbox=sandbox,
+        session_id="s",
+        ttl_seconds=3600,
+        max_calls_per_token=max_calls_per_token,
+        rate_window_s=60,
+    )
+
+
+def test_failed_attempts_consume_quota_and_the_block_is_auditable():
+    store = MemoryTokenStore()
+    _put(store, "⟦tok_00000001⟧", 71000)
+
+    for _ in range(2):
+        with pytest.raises(SandboxError):
+            _failing_compute(store, _FailingSandbox())
+    with pytest.raises(ComputeRateLimitError):
+        _failing_compute(store, _FailingSandbox())
+
+    attempts = store.find_compute_attempts("s")
+    assert [attempt.outcome for attempt in attempts] == ["failed", "failed", "blocked"]
+
+
+def test_timeouts_consume_quota():
+    store = MemoryTokenStore()
+    _put(store, "⟦tok_00000001⟧", 71000)
+
+    with pytest.raises(SandboxTimeoutError):
+        _failing_compute(store, _TimeoutSandbox(), max_calls_per_token=1)
+    with pytest.raises(ComputeRateLimitError):
+        _failing_compute(store, _TimeoutSandbox(), max_calls_per_token=1)
+
+    assert [a.outcome for a in store.find_compute_attempts("s")] == [
+        "timeout",
+        "blocked",
+    ]
+
+
+def test_a_derived_token_cannot_reset_the_root_secrets_quota():
+    store = MemoryTokenStore()
+    original = "⟦tok_00000001⟧"
+    _put(store, original, 71000)
+
+    copied = handle_blindfold_compute(
+        {"code": f"result = resolve('{original}')", "inputs": [original]},
+        store=store,
+        policy=SessionBoundPolicy(),
+        sandbox=SubprocessSandbox(),
+        session_id="s",
+        ttl_seconds=3600,
+        max_calls_per_token=3,
+        rate_window_s=60,
+    )
+    _compute(store, copied, threshold=50000, max_calls_per_token=3)
+    _compute(store, copied, threshold=60000, max_calls_per_token=3)
+    with pytest.raises(ComputeRateLimitError):
+        _compute(store, copied, threshold=70000, max_calls_per_token=3)
+
+    attempts = store.find_compute_attempts("s")
+    assert all(attempt.root_tokens == (original,) for attempt in attempts)
+    assert attempts[-1].outcome == "blocked"

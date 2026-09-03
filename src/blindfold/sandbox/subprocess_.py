@@ -26,7 +26,7 @@ import subprocess
 import sys
 from typing import Any
 
-from blindfold.ports.sandbox import ComputeSandbox, SandboxError
+from blindfold.ports.sandbox import ComputeSandbox, SandboxError, SandboxTimeoutError
 
 _CHILD_WRAPPER = r"""
 import builtins, json, sys
@@ -106,7 +106,7 @@ class SubprocessSandbox(ComputeSandbox):
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            raise SandboxError(f"blind-compute timeout after {timeout_s}s") from exc
+            raise SandboxTimeoutError(f"blind-compute timeout after {timeout_s}s") from exc
 
         # Both branches below hold child output, which can contain resolved
         # values (anything the code printed, or wrote to stderr before dying).

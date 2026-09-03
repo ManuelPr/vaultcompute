@@ -97,6 +97,19 @@ def test_compute_rate_limit_defaults_and_is_configurable(tmp_path: Path):
     assert cfg.compute.rate_window_s == 30
 
 
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"max_calls_per_token": -1},
+        {"rate_window_s": 0},
+        {"rate_window_s": -1},
+    ],
+)
+def test_compute_rate_limit_rejects_unsafe_ranges(values):
+    with pytest.raises(ValidationError):
+        ComputeConfig(**values)
+
+
 def test_unknown_top_level_keys_tolerated(tmp_path: Path):
     p = tmp_path / "blindfold.yaml"
     p.write_text(
@@ -128,7 +141,7 @@ def test_schema_fields_for_present():
         }
     )
     assert schema_fields_for(cfg, "hr.get_salary") == [
-        SchemaField(path="$.salary", semantic_type="salary", unit=None)
+        SchemaField(path="$.salary", semantic_type="salary", unit=None, required=True)
     ]
 
 
@@ -408,3 +421,30 @@ def test_overlapping_patterns_do_not_declare_the_same_path_twice(tmp_path: Path)
         )
     )
     assert [f.path for f in schema_fields_for_resource(cfg, "file:///hr/payroll.json")] == ["$.salary"]
+
+
+def test_protected_paths_are_required_by_default_but_can_be_optional():
+    config = BlindfoldConfig.model_validate(
+        {
+            "schemas": {
+                "get_employee": {
+                    "sensitive_fields": [
+                        {"path": "$.salary"},
+                        {"path": "$.bonus", "required": False},
+                    ],
+                    "tables": [
+                        {
+                            "path": "$.reports",
+                            "columns": [{"name": "name"}],
+                            "required": False,
+                        }
+                    ],
+                }
+            }
+        }
+    )
+
+    schema = config.schemas["get_employee"]
+    assert schema.sensitive_fields[0].required is True
+    assert schema.sensitive_fields[1].required is False
+    assert schema.tables[0].required is False

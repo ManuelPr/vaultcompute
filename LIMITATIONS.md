@@ -20,7 +20,7 @@ A few entries are marked **Fix: none** inside the MVP section — that means the
 Blindfold has four integration modes; a few of the limits below apply to only one of them.
 
 - **Mode A: CLI proxy (beta)** — strict declared-JSON protection, but no final display control with third-party clients.
-- **Mode B: In-process library (reference)** — the application owns tokenization, capability authorization and final rehydration.
+- **Mode B: In-process library (reference)** — `BlindfoldSession` owns tokenization, session policy, capability routing and final rehydration inside the application.
 - **Mode C: Claude Code plugin (experimental)** — supported host result adapters plus display-only reveal; version-sensitive and requires SQLite.
 - **Mode D: Codex plugin (experimental guardrail)** — supported local hook paths only, no display-only reveal, and requires SQLite.
 
@@ -38,7 +38,7 @@ These come from the shape of the problem. No amount of implementation work remov
 
 Blindfold can put placeholders into the model's context. It cannot take them out of the model's answer unless your code handles that answer.
 
-`rehydrate()` is a function call. In Mode B you make it yourself, on the final text, before display — this is the normal case and it works. In Mode A the proxy also answers a custom JSON-RPC method, `blindfold/rehydrate`, but **that method is not part of MCP**: it exists because this project invented it. No third-party MCP client knows to call it.
+In Mode B, `BlindfoldSession.render_final_answer()` wraps rehydration at the final display boundary — this is the normal case and it works. In Mode A the proxy also answers a custom JSON-RPC method, `blindfold/rehydrate`, but **that method is not part of MCP**: it exists because this project invented it. No third-party MCP client knows to call it.
 
 Concretely, wrapping your server with `blindfold -- …` under Claude Desktop, Cursor, Zed or any other client you did not write produces an assistant that answers:
 
@@ -74,9 +74,9 @@ count token cannot be handed to Python to reconstruct the same oracle. In Mode
 B, `TableQueryCapability` can additionally bind the exact table, session,
 operation list and expiry authorized by the trusted application.
 
-Three things bound the damage for compute, which still runs arbitrary Python: the policy check runs per input token, so the model can only interrogate values it was already allowed to compute on; each call is one bit, so extraction is visible in the call log as an obvious pattern of repeated compute calls on the same token; and — as of `config.compute` — a token used as compute input more than `max_calls_per_token` times (default 8) within `rate_window_s` seconds (default 60) is refused for the rest of the window.
+Three things bound the damage for compute, which still runs arbitrary Python: the shared system instruction explicitly forbids adaptive comparisons, deliberate errors, timeouts and token cloning; the policy check runs per input token; and `config.compute` atomically refuses a root secret lineage after `max_calls_per_token` attempts (default 8) within `rate_window_s` seconds (default 60).
 
-That limit is deliberately a rate, not a lifetime count. A flat cap on total reuse would break an ordinary session — the same salary compared against several different thresholds an hour apart is normal and has nothing to do with extraction. What is not normal is many calls on the *same* token in a short burst, which is exactly the shape a binary search takes; spread the same number of calls out past the window and every one succeeds. It does not close the channel — a patient attacker can extract a value at one probe per window instead of one per second — but it turns a silent, instant extraction into a slow one with an unmistakable multi-window pattern in the vault's own lineage, and costs nothing extra to check: it is counted from `blind_compute` records already being written, not a separate counter. Set `max_calls_per_token: 0` to disable it.
+That limit is deliberately a rate, not a lifetime count. A flat cap on total reuse would break an ordinary session. The quota now has its own metadata-only attempt ledger in the vault: it reserves before execution, counts failures and timeouts, follows derived tokens back to every original secret, and uses an SQLite write transaction so concurrent host processes cannot race past it. A blocked reservation is logged immediately and appears as `SUSPICIOUS COMPUTE` in `blindfold audit`; the audit command exits non-zero. Spread the same attempts across later windows and they still succeed, so this contains rather than eliminates the channel. Set `max_calls_per_token: 0` to disable refusal; attempts remain logged for audit.
 
 ### The user's prompt is not protected
 Blindfold intercepts **tool results**, not the user's original question. If the user types *"What is Andrea Tuscano's salary?"*, the name and the intent go to the LLM provider in cleartext. Only the tool response gets tokenized.
@@ -199,21 +199,23 @@ The subprocess sandbox is the one place where real values meet code the model wr
 
 - ~~**Unsupported path syntax fails silently.**~~ **Closed**, and the original description of it was too kind. `$..salary` did not merely match nothing: it was *reinterpreted* as `$.salary`, so it matched a top-level field, missed every nested one, and still minted tokens — leaving a config that looked like it worked. `$.items[*` was accepted as if the bracket had been closed, and `$.a..b` became `$.a.b`. Filters and slices did raise, but only at the first tool call, with `invalid literal for int()`.
 
-  Paths are now validated where a `SchemaField` is born: at config load through a Pydantic validator, and in the dataclass itself so Mode B gets the same guarantee without the YAML. Errors name the offending subscript and, for recursive descent, what the path was silently being read as. Note the distinction that is deliberately preserved: a path that *does not match this particular response* is still a silent no-op — defensive declaration stays free. What is refused is a path that could never mean what its author wrote.
+  Paths are now validated where a `SchemaField` is born: at config load through a Pydantic validator, and in the dataclass itself so Mode B gets the same guarantee without the YAML. Errors name the offending subscript and, for recursive descent, what the path was silently being read as. The low-level tokenizer preserves a non-match as a no-op for compatibility; the Mode B façade fails closed unless that path is configured with `required: false`.
 
 - **Overlapping declarations used to corrupt each other; they are now refused at load.** The tokenizer walks a tool's fields in order, so the same path declared twice tokenized its own placeholder the second time round — the vault held a token whose value was another token, and the user read `⟦tok_…⟧` where the value should have been. A path containing another (`$.employee` alongside `$.employee.salary`) did the same to a subtree. Both are rejected with a message naming the pair. For resources the overlap depends on the URI and cannot be caught statically, so matching globs are merged with the redundant declaration dropped.
 
-- **Non-JSON results are not tokenized.** In the proxy and library modes they
-  pass through unless your own loop refuses them. In the Claude Code and Codex
-  adapters, a configured hooked result that is not an accepted JSON shape is
-  stopped or replaced with safe feedback rather than sent onward unchanged.
-- **Non-text MCP content parts are not protected.** The proxy/library leave them
-  untouched. The host adapters refuse a configured multi-part or non-text
-  result because they cannot identify the declared JSON fields inside it.
+- **Non-JSON results are not tokenized.** Mode A strict and the host adapters
+  block a configured result that is not accepted JSON. Mode A permissive passes
+  it through, and the low-level Mode B tokenizer leaves refusal to your loop.
+  `BlindfoldSession` fails closed when its required paths cannot be found.
+- **Non-text MCP content parts are not protected.** Mode A strict and the host
+  adapters refuse them for configured tools. Mode A permissive and a custom
+  Mode B loop can pass them if the integrator explicitly accepts that gap.
 - **A missing declared path is mode-dependent.** The core tokenizer keeps it as
-  a no-op so defensive declarations remain cheap in Modes A and B. At the host
-  boundary in Modes C and D, a configured result with no replacements is
-  treated as response-shape drift and fails closed.
+  a no-op for compatibility. `BlindfoldSession` checks every required path
+  before writing to the vault and fails closed; genuinely optional paths must
+  be declared with `required: false`. The strict MCP and host boundaries use
+  the same protection kernel and therefore enforce the same required-path
+  rule. Mode A permissive can still forward an unprotectable result.
 - ~~**No collective (table) tokens.**~~ **Closed.** A list declared under `tables:` becomes one token for the whole thing, and the model is told the column names and what they mean. Measured on 500 employees x 5 fields: 2,500 individual tokens before, **1** after, and the model can answer "top three by salary in Eng" — which it could not do at all with 2,500 opaque strings, having no way to sort them or even tell they were comparable.
 
   The query language is a fixed set of operations (`filter`, `sort_by`, `limit`, `select`, `sum`, `mean`, `min`, `max`, `count`) executed by Blindfold, not code. Results come back as new tokens, and a row result carries the columns that survived, so queries can be built up in steps. **This path runs no sandbox**, because no code the model wrote is ever executed.
@@ -225,7 +227,7 @@ The subprocess sandbox is the one place where real values meet code the model wr
 ### Model UX
 - **Token meaning is declared per-path on the tool, not per-token on the result.** The proxy appends each tool's protected paths — with their `semantic_type` and `unit` — to that tool's `description`, so the model is told once rather than on every call. Two consequences: (a) tokens sharing a path share one description, so the model can only tell them apart by their position in the JSON — fine while tokens stay in place, insufficient once collective (table) tokens land; (b) the description is static, derived from config, so it names paths the tool *may* return, not the ones a given response actually contained.
 - **Runtime dtype is not surfaced.** The vault records whether a hidden value is a number, string, or object, but the tool description is built from config alone and cannot know. The model infers it from `semantic_type`/`unit`. Declaring dtype in `blindfold.yaml` would close this if it ever matters.
-- ~~**[Mode B only] `describe_schema()` is exported but nothing calls it for you.**~~ **Closed — this entry was stale.** `examples/demo_chat.py` appends `describe_schema(fields)` per tool before handing the list to the model (each `list_tools()` result gets `describe_schema(schema_fields_for(config, t.name))` folded into its description), and `examples/try_modes.py`'s Mode B walkthrough does the same plus `describe_tables()` for collective tokens. Both landed in `16fc419`, before this document's last pass through the MVP section — the code was already right and the write-up hadn't caught up. `describe_config(config)` remains the alternative for a single up-front briefing instead of per-tool text.
+- ~~**[Mode B only] `describe_schema()` is exported but nothing calls it for you.**~~ **Closed.** `BlindfoldSession.model_instructions` builds one up-front briefing from the complete configuration. Per-tool `describe_schema()` and `describe_tables()` remain available for integrations that prefer to augment individual tool definitions.
 
 - ~~**The prompt fragment that keeps placeholders intact is not shipped as a constant.**~~ **Closed — same commit, same stale entry.** `PLACEHOLDER_PROMPT` is exported from the package root (`from blindfold import PLACEHOLDER_PROMPT`) and both `examples/demo_chat.py` and `examples/try_modes.py` import it from there rather than defining their own copy. Modes C and D carry the same text inside the `SessionStart` briefing, so every integration draws from one source rather than drifting paraphrases.
 

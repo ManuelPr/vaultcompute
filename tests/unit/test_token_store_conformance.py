@@ -201,6 +201,55 @@ def test_stores_survive_concurrent_use_from_threads(store):
     assert len(store.find_by_session("s")) == 800
 
 
+@freeze_time(NOW)
+def test_compute_attempt_lifecycle_round_trips(store):
+    expires = NOW + timedelta(hours=1)
+    attempt_id = store.reserve_compute_attempt(
+        session_id="s",
+        root_tokens=("root",),
+        input_tokens=("derived",),
+        code_digest="abc",
+        expires_at=expires,
+        max_attempts=8,
+        window_s=60,
+    )
+    assert store.find_compute_attempts("s")[0].outcome == "started"
+    store.finish_compute_attempt(attempt_id, "failed")
+    attempt = store.find_compute_attempts("s")[0]
+    assert attempt.root_tokens == ("root",)
+    assert attempt.input_tokens == ("derived",)
+    assert attempt.outcome == "failed"
+
+
+@freeze_time(NOW)
+def test_compute_quota_reservation_is_atomic(store):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from blindfold.core.compute_attempts import ComputeRateLimitError
+
+    def reserve(index):
+        try:
+            return store.reserve_compute_attempt(
+                session_id="s",
+                root_tokens=("root",),
+                input_tokens=(f"input-{index}",),
+                code_digest=str(index),
+                expires_at=NOW + timedelta(hours=1),
+                max_attempts=3,
+                window_s=60,
+            )
+        except ComputeRateLimitError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        reservations = list(pool.map(reserve, range(8)))
+
+    assert sum(result is not None for result in reservations) == 3
+    outcomes = [attempt.outcome for attempt in store.find_compute_attempts("s")]
+    assert outcomes.count("started") == 3
+    assert outcomes.count("blocked") == 5
+
+
 # --- what only the persistent store can do --------------------------------
 
 
@@ -231,6 +280,41 @@ def test_sqlite_is_shared_between_two_open_connections(tmp_path):
     finally:
         tokenizer.close()
         rehydrator.close()
+
+
+@freeze_time(NOW)
+def test_sqlite_compute_quota_is_atomic_across_connections(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from blindfold.core.compute_attempts import ComputeRateLimitError
+
+    path = tmp_path / "vault.db"
+    stores = [SQLiteTokenStore(path), SQLiteTokenStore(path)]
+
+    def reserve(index):
+        try:
+            return stores[index % 2].reserve_compute_attempt(
+                session_id="s",
+                root_tokens=("root",),
+                input_tokens=(f"input-{index}",),
+                code_digest=str(index),
+                expires_at=NOW + timedelta(hours=1),
+                max_attempts=3,
+                window_s=60,
+            )
+        except ComputeRateLimitError:
+            return None
+
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            reservations = list(pool.map(reserve, range(8)))
+        assert sum(result is not None for result in reservations) == 3
+        attempts = stores[0].find_compute_attempts("s")
+        assert sum(a.outcome == "started" for a in attempts) == 3
+        assert sum(a.outcome == "blocked" for a in attempts) == 5
+    finally:
+        for store in stores:
+            store.close()
 
 
 @freeze_time(NOW)

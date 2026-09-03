@@ -114,12 +114,14 @@ reports any hidden value that made it through.
   the hook returns immediately when the text contains no placeholders. The text
   to check arrives under `delta` (the newly-completed-lines chunk), not the
   whole message.
-- **If `python_unsafe` is enabled, `blindfold_compute` calls on the same token are rate-limited** —
+- **If `python_unsafe` is enabled, secret compute attempts are lineage-rate-limited** —
   `compute.max_calls_per_token` (default 8) within `compute.rate_window_s`
   (default 60) — to bound how fast a model probing for a hidden value one bit
   at a time (see [`../LIMITATIONS.md`](../LIMITATIONS.md)) can extract it.
-  Ordinary reuse of a token spread across a session is unaffected; only a burst
-  on one token trips it.
+  Attempts reserve quota before execution, including failures and timeouts.
+  Derived tokens share the original secrets' budget, and SQLite reservations
+  are atomic across hook/MCP processes. Blocks are logged and shown by
+  `blindfold audit`. Ordinary reuse spread across a session is unaffected.
 - **Host telemetry is outside this guarantee.** Blindfold rewrites the result
   before the next model request. A host may have recorded the original tool
   result locally or in its own telemetry before the hook ran.

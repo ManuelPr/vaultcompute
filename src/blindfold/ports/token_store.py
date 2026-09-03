@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any
 
+from blindfold.core.compute_attempts import ComputeAttempt
 from blindfold.core.lineage import VaultRecord
 
 
@@ -45,3 +46,23 @@ class TokenStore(ABC):
 
     @abstractmethod
     def purge_expired(self, now: datetime | None = None) -> int: ...
+
+    @abstractmethod
+    def reserve_compute_attempt(
+        self,
+        *,
+        session_id: str,
+        root_tokens: tuple[str, ...],
+        input_tokens: tuple[str, ...],
+        code_digest: str,
+        expires_at: datetime,
+        max_attempts: int,
+        window_s: int,
+    ) -> str:
+        """Atomically count and reserve one secret-dependent computation."""
+
+    @abstractmethod
+    def finish_compute_attempt(self, attempt_id: str, outcome: str) -> None: ...
+
+    @abstractmethod
+    def find_compute_attempts(self, session_id: str) -> list[ComputeAttempt]: ...

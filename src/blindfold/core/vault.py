@@ -19,10 +19,17 @@ and never goes near the proxy.
 
 from __future__ import annotations
 
+import secrets
 import threading
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
+from blindfold.core.compute_attempts import (
+    ATTEMPT_OUTCOMES,
+    ComputeAttempt,
+    ComputeRateLimitError,
+)
 from blindfold.core.lineage import VaultRecord
 from blindfold.ports.token_store import TokenStore
 
@@ -34,6 +41,7 @@ class MemoryTokenStore(TokenStore):
 
     def __init__(self) -> None:
         self._records: dict[str, VaultRecord] = {}
+        self._compute_attempts: dict[str, ComputeAttempt] = {}
         self._lock = threading.RLock()
         self._last_purge = self._now()
 
@@ -97,7 +105,83 @@ class MemoryTokenStore(TokenStore):
             expired = [t for t, r in self._records.items() if r.ttl <= cutoff]
             for t in expired:
                 del self._records[t]
+            expired_attempts = [
+                attempt_id
+                for attempt_id, attempt in self._compute_attempts.items()
+                if attempt.expires_at <= cutoff
+            ]
+            for attempt_id in expired_attempts:
+                del self._compute_attempts[attempt_id]
         return len(expired)
+
+    def reserve_compute_attempt(
+        self,
+        *,
+        session_id: str,
+        root_tokens: tuple[str, ...],
+        input_tokens: tuple[str, ...],
+        code_digest: str,
+        expires_at: datetime,
+        max_attempts: int,
+        window_s: int,
+    ) -> str:
+        attempt_id = f"attempt_{secrets.token_hex(16)}"
+        now = self._now()
+        cutoff = now.timestamp() - window_s
+        roots = tuple(sorted(set(root_tokens)))
+        blocked_count = 0
+        with self._lock:
+            recent = [
+                attempt
+                for attempt in self._compute_attempts.values()
+                if attempt.session_id == session_id
+                and attempt.created_at.timestamp() >= cutoff
+                and attempt.outcome != "blocked"
+            ]
+            for root in roots:
+                blocked_count = max(
+                    blocked_count,
+                    sum(1 for attempt in recent if root in attempt.root_tokens),
+                )
+            blocked = max_attempts > 0 and blocked_count >= max_attempts
+            self._compute_attempts[attempt_id] = ComputeAttempt(
+                attempt_id=attempt_id,
+                session_id=session_id,
+                root_tokens=roots,
+                input_tokens=tuple(input_tokens),
+                created_at=now,
+                expires_at=expires_at,
+                code_digest=code_digest,
+                outcome="blocked" if blocked else "started",
+            )
+        if blocked:
+            raise ComputeRateLimitError(
+                recent_count=blocked_count,
+                max_attempts=max_attempts,
+                window_s=window_s,
+            )
+        return attempt_id
+
+    def finish_compute_attempt(self, attempt_id: str, outcome: str) -> None:
+        if outcome not in ATTEMPT_OUTCOMES or outcome in ("started", "blocked"):
+            raise ValueError(f"invalid terminal compute outcome: {outcome!r}")
+        with self._lock:
+            attempt = self._compute_attempts.get(attempt_id)
+            if attempt is None:
+                raise KeyError(f"unknown compute attempt: {attempt_id}")
+            self._compute_attempts[attempt_id] = replace(attempt, outcome=outcome)
+
+    def find_compute_attempts(self, session_id: str) -> list[ComputeAttempt]:
+        now = self._now()
+        with self._lock:
+            return sorted(
+                (
+                    attempt
+                    for attempt in self._compute_attempts.values()
+                    if attempt.session_id == session_id and attempt.expires_at > now
+                ),
+                key=lambda attempt: attempt.created_at,
+            )
 
     @staticmethod
     def _now() -> datetime:

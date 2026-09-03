@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
@@ -90,6 +91,17 @@ class Report:
     #: a literal the model wrote into its own code — not a leak, see
     #: `_literals_the_model_already_wrote`.
     explained: list[Finding] = field(default_factory=list)
+    compute_attempts: int = 0
+    compute_outcomes: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def suspicious_compute(self) -> bool:
+        return self.compute_outcomes.get("blocked", 0) > 0
+
+    @property
+    def passed(self) -> bool:
+        """Suitable for CI: neither a value leak nor a blocked probing burst."""
+        return self.clean and not self.suspicious_compute
 
     @property
     def clean(self) -> bool:
@@ -100,6 +112,16 @@ class Report:
             f"vault records            : {self.records}",
             f"placeholders in transcript: {self.placeholders_seen}",
         ]
+        if self.compute_attempts:
+            outcomes = ", ".join(
+                f"{name}={count}" for name, count in sorted(self.compute_outcomes.items())
+            )
+            lines.append(f"secret compute attempts  : {self.compute_attempts} ({outcomes})")
+        if self.suspicious_compute:
+            lines.append(
+                "SUSPICIOUS COMPUTE       : the lineage rate limit blocked "
+                f"{self.compute_outcomes['blocked']} attempt(s)"
+            )
         if self.unresolved:
             lines.append(
                 f"placeholders that do not resolve: {len(self.unresolved)} "
@@ -162,6 +184,9 @@ def audit(transcript: str, store: TokenStore, session_id: str) -> Report:
 
     records = store.find_by_session(session_id)
     report.records = len(records)
+    attempts = store.find_compute_attempts(session_id)
+    report.compute_attempts = len(attempts)
+    report.compute_outcomes = dict(Counter(attempt.outcome for attempt in attempts))
 
     for token in seen:
         if store.get(token) is None:

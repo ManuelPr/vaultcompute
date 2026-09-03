@@ -64,7 +64,7 @@ field you did not declare goes to the model in cleartext.
 Putting placeholders *into* the model's context is easy from anywhere. Taking
 them *out* of its answer needs someone who holds that answer.
 
-- **Mode B**: your code holds it. You call `rehydrate()`. Works.
+- **Mode B**: your `BlindfoldSession` holds it and renders the final answer. Works.
 - **Mode C**: Claude Code holds it, and offers a hook that rewrites what the
   screen shows. Works — and better than Mode B, see below.
 - **Mode D**: Codex can replace a supported local tool result before the model
@@ -127,47 +127,46 @@ read by code, or a client you plan to extend.
 
 ## Mode B — in-process library
 
-**What it is.** You import Blindfold and call it at five points in the agent
-loop you already have. No MCP required; works with Anthropic, OpenAI, Gemini,
-Ollama, LangChain, or a loop you wrote yourself.
+**What it is.** You create a `BlindfoldSession` around the agent loop you
+already have. No MCP required; works with Anthropic, OpenAI, Gemini, Ollama,
+LangChain, or a loop you wrote yourself.
 
 **Setup.**
 
 ```python
-from blindfold import PLACEHOLDER_PROMPT, rehydrate
-from blindfold.config import load_config, schema_fields_for, table_schemas_for, build_token_store
-from blindfold.core.policy import SessionBoundPolicy
-from blindfold.core.tokenizer import describe_schema, describe_tables, tokenize_result
-from blindfold.sandbox.subprocess_ import SubprocessSandbox
-from blindfold.tools import blindfold_compute, blindfold_table
+from blindfold import BlindfoldSession
+from blindfold.config import load_config
 
 config = load_config("blindfold.yaml")
-store, policy, sandbox = build_token_store(config), SessionBoundPolicy(), SubprocessSandbox()
-session_id = f"user_{user_uuid}"
+session = BlindfoldSession(config, session_id=f"user_{user_uuid}")
 ```
 
-The five points:
+The safe path:
 
-1. **Put `PLACEHOLDER_PROMPT` in your system prompt.** Rehydration only works on
-   placeholders the model reproduced exactly; this is what tells it to.
-2. **Describe your protected tools.** Append `describe_schema(...)` and
-   `describe_tables(...)` to each tool's description before you send the tool
-   list. Nothing does this for you here.
+1. **Put `session.model_instructions` in your system prompt.** It includes the
+   placeholder rules and every configured protected path.
+2. **Protect every tool result.** Prefer
+   `session.call_protected_tool(tool_name, function, *args)` for synchronous
+   tools, so the caller receives only the protected copy. When a framework has
+   already invoked the tool, use `session.protect_tool_result(tool_name,
+   result)` immediately.
 3. **Advertise only the selected operation tools.** In the default controlled
    profile add `blindfold_table` for declared tables. Add
    `blindfold_compute.build_tool_definition()` only after an explicit
    cooperative-model decision.
-4. **Tokenize every tool result** before feeding it back:
-   `tokenize_result(payload, tool_name, fields, store, session_id, ttl, tables=tables)`.
-5. **Route the compute calls** to `handle_blindfold_compute` /
-   `handle_blindfold_table`, and **call `rehydrate(final_text, session_id, store, policy)`**
-   before display.
+4. **Render only the final answer** with
+   `session.render_final_answer(model_answer)` immediately before display.
 
 For user-intent authorization, the trusted application can issue a
-`TableQueryCapability` and call `handle_blindfold_table(...,
-capability=capability, require_capability=True)`. The capability matches the
+`TableQueryCapability` and call `session.execute_authorized_query(...,
+capability=capability)`. This method always requires the capability. It matches the
 session, table, full operation list and expiry exactly; a model-proposed change
 is refused without asking another model to judge semantic similarity.
+
+Configured paths are required by default. If a field is legitimately absent
+from some successful responses, declare `required: false`. Unknown tools,
+missing required paths and malformed declared tables stop with
+`ProtectionError`; the façade never returns the raw result as a fallback.
 
 See [`examples/demo_chat.py`](../examples/demo_chat.py) for the whole thing
 against the Anthropic SDK.
@@ -181,11 +180,13 @@ against the Anthropic SDK.
 
 **What you do not get**
 
-- Anything automatically. Every point above is yours to wire, and a forgotten
-  step fails quietly — a missing step 2 leaves the model guessing what a
-  placeholder is; a missing step 1 makes it paraphrase placeholders and break
-  rehydration.
-- Protection for tools you forget to run through `tokenize_result`.
+- Control over an LLM SDK you call outside the façade: the application must
+  still send the protected result, not a raw result it obtained elsewhere.
+- Automatic async tool invocation. Protect an awaited result immediately with
+  `protect_tool_result()`.
+
+The primitive tokenizer, rehydrator and handlers remain available as an
+advanced API for integrations that need custom orchestration.
 
 **Pick it by default** when you write the loop or need the strongest available
 boundary. This is the reference mode because your application owns every seam.
@@ -317,7 +318,7 @@ their real values in Codex's final answer.
 | **Values reach the user** | **no** | yes | yes | **no** |
 | Values kept out of the next turn | n/a | no | **yes** | yes, as placeholders |
 | Persistent vault required | no | no | **yes** | **yes** |
-| Application code changes | none | five points | none | none |
+| Application code changes | none | one session façade | none | none |
 
 ---
 
@@ -381,9 +382,11 @@ reasoning, is in [`LIMITATIONS.md`](../LIMITATIONS.md).
   extract a value can learn one bit per call by writing code that fails on
   purpose. `blindfold_table` cannot be used that way — where your data is a
   list, prefer a table. For `blindfold_compute`, `compute.max_calls_per_token`/
-  `rate_window_s` (default: 8 calls per 60s, per token) bound how *fast* that
-  channel can be probed — reused across a session it is invisible, a burst
-  trips it — but it does not close the channel, only slows it down.
+  `rate_window_s` (default: 8 attempts per 60s, per original secret lineage)
+  bound how *fast* that channel can be probed. The quota is reserved before
+  execution, counts failures and timeouts, cannot be reset with a derived
+  token, and is atomic across SQLite-backed host processes. Blocks are logged
+  and reported by `blindfold audit`, but the limit still only slows the channel.
 - **Access control is your API's job.** Blindfold forwards requests untouched.
   If your API answers anyone, Blindfold faithfully hides data the caller should
   never have received.

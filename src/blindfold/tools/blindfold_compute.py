@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from blindfold.core.lineage import Lineage, Policy, VaultRecord, compose_policy, compose_ttl
+from blindfold.core.compute_attempts import ComputeRateLimitError
+from blindfold.core.lineage import Lineage, VaultRecord, compose_policy, compose_ttl
 from blindfold.ports.policy import DetokenizeContext, DetokenizePolicy
-from blindfold.ports.sandbox import ComputeSandbox
+from blindfold.ports.sandbox import ComputeSandbox, SandboxTimeoutError
 from blindfold.ports.token_store import TokenStore
 
 BLINDFOLD_COMPUTE_TOOL_NAME = "blindfold_compute"
 
 _TOOL_DESCRIPTION = (
-    "Run Python code on hidden values behind tokens ⟦tok_…⟧. "
+    "UNSAFE COOPERATIVE-MODEL PROFILE: run Python code on hidden values behind "
+    "tokens ⟦tok_…⟧. Never probe a hidden value with repeated or adaptive "
+    "comparisons, deliberate errors, timeouts, or cloned derived tokens. "
     "Every token the code touches via resolve(...) MUST be listed in `inputs`. "
     "resolve(token) returns the hidden value ALREADY in its real type (a number stays "
     "a number, a string stays a string) — never a JSON string, never the whole tool "
@@ -55,45 +59,27 @@ def _infer_dtype(value: Any) -> str:
     return "object"
 
 
-def _refuse_if_probed_too_fast(
-    tokens: list[str],
-    *,
-    store: TokenStore,
-    session_id: str,
-    max_calls: int,
-    window_s: int,
-) -> None:
-    """Bound how fast a single token can be re-used as compute input.
+def _lineage_roots(tokens: list[str], store: TokenStore) -> tuple[str, ...]:
+    """Return the original secrets behind inputs, not their latest aliases."""
+    roots: set[str] = set()
+    visited: set[str] = set()
 
-    A token legitimately reused many times across a long session — the same
-    salary compared against several different thresholds, hours apart — must
-    not trip this. What should is many calls on the *same* token in a short
-    burst: that is the shape of the binary-search oracle in LIMITATIONS.md,
-    which extracts a value through the tool's success/failure, not its return
-    value (every result is tokenized regardless of type, so a plain boolean
-    reveals nothing on its own).
+    def visit(token: str) -> None:
+        if token in visited:
+            return
+        visited.add(token)
+        record = store.get(token)
+        if record is None or not record.lineage.inputs:
+            roots.add(token)
+            return
+        for parent in record.lineage.inputs:
+            visit(parent)
 
-    Counted from `blind_compute` records already in the vault rather than a
-    separate counter, so there is nothing new to keep in sync.
-    """
-    if max_calls <= 0:
-        return
-    cutoff = datetime.now(tz=timezone.utc) - timedelta(seconds=window_s)
-    recent = [
-        r
-        for r in store.find_by_session(session_id)
-        if r.lineage.op == "blind_compute" and r.created_at >= cutoff
-    ]
-    for token in set(tokens):
-        count = sum(1 for r in recent if token in r.lineage.inputs)
-        if count >= max_calls:
-            raise ValueError(
-                f"compute rate limit: this token has been used {count} times in "
-                f"the last {window_s}s (limit {max_calls}). If this is a single "
-                f"legitimate computation, wait and retry; for filtering/sorting/"
-                f"aggregating a list, blindfold_table has no such limit because "
-                f"it cannot fail on the data."
-            )
+    for token in tokens:
+        visit(token)
+    # A malformed cycle inserted through a custom store must not become a way
+    # to escape accounting.
+    return tuple(sorted(roots or set(tokens)))
 
 
 def handle_blindfold_compute(
@@ -112,6 +98,10 @@ def handle_blindfold_compute(
     inputs = args.get("inputs")
     if not isinstance(code, str) or not isinstance(inputs, list):
         raise ValueError("blindfold_compute requires string `code` and list `inputs`")
+    if max_calls_per_token < 0 or rate_window_s <= 0:
+        raise ValueError(
+            "compute rate limit requires max_calls_per_token >= 0 and rate_window_s > 0"
+        )
 
     ctx = DetokenizeContext(session_id=session_id)
     resolved: dict[str, Any] = {}
@@ -125,17 +115,6 @@ def handle_blindfold_compute(
         resolved[token] = record.value
         input_records.append(record)
 
-    _refuse_if_probed_too_fast(
-        inputs,
-        store=store,
-        session_id=session_id,
-        max_calls=max_calls_per_token,
-        window_s=rate_window_s,
-    )
-
-    value = sandbox.run(code=code, inputs=resolved, timeout_s=code_timeout_s)
-
-    new_token = TokenStore.mint_token()
     now = datetime.now(tz=timezone.utc)
     ttl = (
         compose_ttl(input_records)
@@ -145,18 +124,59 @@ def handle_blindfold_compute(
     derived_policy = compose_policy([r.policy for r in input_records])
     digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
 
-    store.put(
-        VaultRecord(
-            token=new_token,
-            value=value,
-            dtype=_infer_dtype(value),
-            semantic_type=None,
-            unit=None,
-            session_id=session_id,
-            created_at=now,
-            ttl=ttl,
-            lineage=Lineage(op="blind_compute", inputs=tuple(inputs), code_digest=digest),
-            policy=derived_policy,
+    attempt_id: str | None = None
+    if input_records:
+        try:
+            attempt_id = store.reserve_compute_attempt(
+                session_id=session_id,
+                root_tokens=_lineage_roots(inputs, store),
+                input_tokens=tuple(inputs),
+                code_digest=digest,
+                # Keep metadata alive for at least the whole quota/sandbox
+                # interval even if an input token was seconds from expiry.
+                expires_at=max(
+                    ttl,
+                    now
+                    + timedelta(seconds=max(float(rate_window_s), code_timeout_s) + 1),
+                ),
+                max_attempts=max_calls_per_token,
+                window_s=rate_window_s,
+            )
+        except ComputeRateLimitError as exc:
+            print(
+                "[blindfold] suspicious compute burst blocked: "
+                f"{exc.recent_count} lineage attempts in {exc.window_s}s",
+                file=sys.stderr,
+            )
+            raise
+
+    try:
+        value = sandbox.run(code=code, inputs=resolved, timeout_s=code_timeout_s)
+        new_token = TokenStore.mint_token()
+        store.put(
+            VaultRecord(
+                token=new_token,
+                value=value,
+                dtype=_infer_dtype(value),
+                semantic_type=None,
+                unit=None,
+                session_id=session_id,
+                created_at=now,
+                ttl=ttl,
+                lineage=Lineage(
+                    op="blind_compute", inputs=tuple(inputs), code_digest=digest
+                ),
+                policy=derived_policy,
+            )
         )
-    )
+    except SandboxTimeoutError:
+        if attempt_id is not None:
+            store.finish_compute_attempt(attempt_id, "timeout")
+        raise
+    except Exception:
+        if attempt_id is not None:
+            store.finish_compute_attempt(attempt_id, "failed")
+        raise
+    if attempt_id is not None:
+        store.finish_compute_attempt(attempt_id, "succeeded")
     return new_token
