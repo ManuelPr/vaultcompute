@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any
 
 from mcp.server import Server
@@ -51,12 +52,21 @@ def _build_server() -> Server:
     async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         if name == "list_employees":
             # A list, so the demos have something to show a collective token on.
-            return [TextContent(type="text", text=json.dumps({"employees": _EMPLOYEES}))]
+            return [
+                TextContent(type="text", text=json.dumps({"employees": _EMPLOYEES}))
+            ]
         if name != "get_salary":
             raise ValueError(f"unknown tool: {name}")
         person = arguments["name"]
-        salary = _SALARIES.get(person, 0)
-        return [TextContent(type="text", text=json.dumps({"name": person, "salary": salary}))]
+        live_canary = os.environ.get("BLINDFOLD_LIVE_CANARY")
+        salary = (
+            int(live_canary) if live_canary is not None else _SALARIES.get(person, 0)
+        )
+        return [
+            TextContent(
+                type="text", text=json.dumps({"name": person, "salary": salary})
+            )
+        ]
 
     return server
 
@@ -64,7 +74,9 @@ def _build_server() -> Server:
 async def _amain() -> None:
     server = _build_server()
     async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())
+        await server.run(
+            read_stream, write_stream, server.create_initialization_options()
+        )
 
 
 def main() -> None:

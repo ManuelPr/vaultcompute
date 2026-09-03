@@ -23,6 +23,7 @@ from mcp.client.stdio import stdio_client
 from blindfold import PLACEHOLDER_PROMPT, rehydrate
 from blindfold.config import (
     BlindfoldConfig,
+    ComputeConfig,
     SensitiveFieldConfig,
     ToolSchemaConfig,
     schema_fields_for,
@@ -56,7 +57,10 @@ async def _amain(question: str) -> None:
                     SensitiveFieldConfig(path="$.salary", semantic_type="salary", unit="EUR/year")
                 ]
             )
-        }
+        },
+        # This demo exercises arbitrary Python intentionally. Production code
+        # should prefer a declared table plus TableQueryCapability.
+        compute=ComputeConfig(mode="python_unsafe"),
     )
     ttl = datetime.now(tz=timezone.utc) + timedelta(hours=1)
 

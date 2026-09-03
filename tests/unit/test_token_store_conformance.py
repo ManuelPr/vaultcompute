@@ -155,7 +155,7 @@ def test_invalidate_cascade_on_unknown_token_returns_zero(store):
 def test_mint_token_comes_from_the_port(store):
     token = TokenStore.mint_token()
     assert token.startswith("⟦tok_") and token.endswith("⟧")
-    assert len(token.removeprefix("⟦tok_").removesuffix("⟧")) == 16
+    assert len(token.removeprefix("⟦tok_").removesuffix("⟧")) == 32
 
 
 @freeze_time(NOW)

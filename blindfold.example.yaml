@@ -31,13 +31,23 @@ schemas:
 tokens:
   default_ttl: 3600
 
-# Bounds how fast a single token can be reused as blindfold_compute input.
-# blindfold_compute can leak one bit per call by writing code whose success
-# depends on a hidden value (see LIMITATIONS.md); reused across a session this
-# is invisible, a burst on one token trips it. 0 disables the check.
 compute:
+  # controlled (default): expose only blindfold_table for declared tables.
+  # disabled: expose no data-operation tools.
+  # python_unsafe: also expose arbitrary model-written Python. This assumes a
+  # cooperative model and is never selected implicitly.
+  mode: controlled
+
+  # Defense in depth for python_unsafe; it slows the success/failure oracle but
+  # cannot close it. 0 disables the rate check.
   max_calls_per_token: 8
   rate_window_s: 60
+
+proxy:
+  # Reject JSON-RPC batches, non-JSON protected output, unsupported content
+  # parts, and declared paths that no longer match. false restores compatibility
+  # passthrough and is not a complete privacy boundary.
+  strict: true
 
 storage:
   # memory (default) loses everything when the process ends. Choose sqlite when

@@ -9,6 +9,8 @@ from blindfold.config import (
     build_token_store,
     describe_config,
     BlindfoldConfig,
+    ComputeConfig,
+    ProxyConfig,
     SensitiveFieldConfig,
     ToolSchemaConfig,
     TokensConfig,
@@ -27,6 +29,37 @@ def test_load_missing_file_returns_defaults(tmp_path: Path):
     assert cfg == BlindfoldConfig()
     assert cfg.tokens.default_ttl == 3600
     assert cfg.schemas == {}
+    assert cfg.compute.mode == "controlled"
+    assert cfg.proxy.strict is True
+
+
+def test_compute_mode_must_name_an_implemented_profile():
+    with pytest.raises(ValidationError, match="unknown compute mode"):
+        ComputeConfig(mode="sandbox_magic")
+
+
+def test_python_compute_requires_explicit_opt_in():
+    assert ComputeConfig().mode == "controlled"
+    assert ComputeConfig(mode="python_unsafe").mode == "python_unsafe"
+
+
+def test_proxy_can_be_made_permissive_only_explicitly():
+    assert ProxyConfig().strict
+    assert not ProxyConfig(strict=False).strict
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        {"proxy": {"strcit": False}},
+        {"compute": {"mdoe": "python_unsafe"}},
+        {"storage": {"encrypt_at_res": True}},
+        {"tokens": {"default_ttl_seconds": 10}},
+    ],
+)
+def test_typos_inside_security_sections_are_refused(section):
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        BlindfoldConfig.model_validate(section)
 
 
 def test_load_full_config(tmp_path: Path):
@@ -72,7 +105,7 @@ schemas: {}
 detokenize:
   policy: webhook
   webhook_url: https://myapp.internal/authz
-compute:
+future_compute:
   sandbox: docker
 identity:
   forward_headers: [Authorization]

@@ -24,7 +24,11 @@ from blindfold.core.tokenizer import SchemaField, path_segments, validate_path
 from blindfold.ports.token_store import TokenStore
 
 
-class SensitiveFieldConfig(BaseModel):
+class StrictConfigModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class SensitiveFieldConfig(StrictConfigModel):
     path: str
     semantic_type: str | None = None
     unit: str | None = None
@@ -39,13 +43,13 @@ class SensitiveFieldConfig(BaseModel):
         return path
 
 
-class ColumnConfig(BaseModel):
+class ColumnConfig(StrictConfigModel):
     name: str
     semantic_type: str | None = None
     unit: str | None = None
 
 
-class TableConfig(BaseModel):
+class TableConfig(StrictConfigModel):
     """A list the model gets as one token, with a queryable column schema.
 
     The declared columns are what the model may *reference*, not what is
@@ -76,7 +80,7 @@ class TableConfig(BaseModel):
         return columns
 
 
-class ToolSchemaConfig(BaseModel):
+class ToolSchemaConfig(StrictConfigModel):
     sensitive_fields: list[SensitiveFieldConfig] = []
     tables: list[TableConfig] = []
 
@@ -116,11 +120,15 @@ class ToolSchemaConfig(BaseModel):
         return self
 
 
-class TokensConfig(BaseModel):
+class TokensConfig(StrictConfigModel):
     default_ttl: int = 3600
 
 
-class ComputeConfig(BaseModel):
+class ComputeConfig(StrictConfigModel):
+    #: ``controlled`` exposes only blindfold_table. ``python_unsafe`` also
+    #: exposes arbitrary Python and must be a deliberate opt-in. ``disabled``
+    #: exposes neither compute surface.
+    mode: str = "controlled"
     #: A token used as `blindfold_compute` input more than this many times
     #: within `rate_window_s` is refused for the rest of the window. Bounds
     #: how fast the tool's success/failure side channel (see LIMITATIONS.md,
@@ -130,12 +138,26 @@ class ComputeConfig(BaseModel):
     max_calls_per_token: int = 8
     rate_window_s: int = 60
 
+    @field_validator("mode")
+    @classmethod
+    def _known_mode(cls, mode: str) -> str:
+        allowed = ("disabled", "controlled", "python_unsafe")
+        if mode not in allowed:
+            raise ValueError(f"unknown compute mode {mode!r}. Available: {', '.join(allowed)}")
+        return mode
+
+
+class ProxyConfig(StrictConfigModel):
+    #: Shapes the proxy cannot inspect are blocked by default. Permissive mode
+    #: is compatibility-only and is not a complete privacy boundary.
+    strict: bool = True
+
 
 _IMPLEMENTED_BACKENDS = ("memory", "sqlite")
 _PLANNED_BACKENDS = ("redis", "postgres")
 
 
-class StorageConfig(BaseModel):
+class StorageConfig(StrictConfigModel):
     backend: str = "memory"
     path: str = "./vault.db"
     encrypt_at_rest: bool = False
@@ -167,6 +189,7 @@ class BlindfoldConfig(BaseModel):
     tokens: TokensConfig = TokensConfig()
     storage: StorageConfig = StorageConfig()
     compute: ComputeConfig = ComputeConfig()
+    proxy: ProxyConfig = ProxyConfig()
 
 
 def load_config(path: Path | str) -> BlindfoldConfig:
@@ -210,8 +233,13 @@ def describe_config(config: BlindfoldConfig) -> str | None:
     return (
         "Blindfold is protecting some of this session's tool results.\n\n"
         + PLACEHOLDER_PROMPT
-        + "\n\n(In a host, the compute tool may appear as "
-        "`mcp__blindfold__blindfold_compute`.)\n\n"
+        + (
+            "\n\nArbitrary Python is enabled by explicit operator opt-in and may "
+            "appear as `mcp__blindfold__blindfold_compute`."
+            if config.compute.mode == "python_unsafe"
+            else "\n\nArbitrary Python compute is not enabled in this session."
+        )
+        + "\n\n"
         "Protected paths:\n" + "\n".join(lines)
     )
 

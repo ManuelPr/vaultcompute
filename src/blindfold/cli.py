@@ -12,18 +12,20 @@ from blindfold import audit as audit_mod
 from blindfold import hooks, mcp_server
 from blindfold.config import BlindfoldConfig, build_token_store, load_config
 from blindfold.core.policy import SessionBoundPolicy
+from blindfold.hosts import CLAUDE_CODE, HOSTS
 from blindfold.proxy import run_proxy
 
 USAGE = (
     "blindfold [--config PATH] -- <downstream-mcp-command> [args...]\n"
-    "blindfold hook <post-tool-use|message-display|session-start> [--config PATH]\n"
+    "blindfold hook <event> [--host claude-code|codex] [--config PATH]\n"
     "blindfold mcp-server [--config PATH]\n"
     "blindfold audit <transcript> [--session ID] [--config PATH]\n\n"
-    "Wraps the given stdio MCP server, tokenizing tool results and exposing\n"
-    "the blindfold_compute tool + blindfold/rehydrate JSON-RPC method.\n\n"
-    "`hook` reads one Claude Code hook event as JSON on stdin and writes the\n"
-    "hook response on stdout. `mcp-server` exposes blindfold_compute so a host\n"
-    "can offer it as an ordinary tool. Both need a shared vault\n"
+    "Wraps the given stdio MCP server, tokenizing declared JSON tool results\n"
+    "and exposing configured operation tools + blindfold/rehydrate. Strict\n"
+    "protocol handling is the default; arbitrary Python is opt-in.\n\n"
+    "`hook` reads one Claude Code or Codex hook event as JSON on stdin and writes the\n"
+    "hook response on stdout. `mcp-server` exposes the operation tools selected\n"
+    "by compute.mode. Both need a shared vault\n"
     "(storage.backend: sqlite): they run as separate processes.\n\n"
     "`audit` checks a transcript against the vault and reports whether any\n"
     "hidden value reached the model — the question the screen cannot answer."
@@ -90,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_hook(argv: list[str]) -> int:
-    """Handle one Claude Code hook event.
+    """Handle one host lifecycle event.
 
     Failure is asymmetric on purpose. Printing nothing tells the host to keep
     what it had: for ``PostToolUse`` that is the untokenized tool result on its
@@ -99,16 +101,25 @@ def run_hook(argv: list[str]) -> int:
     is a nuisance and not a disclosure, so that one stays quiet.
     """
     parser = argparse.ArgumentParser(prog="blindfold hook", usage=USAGE)
-    parser.add_argument("event", choices=list(hooks.EVENTS))
+    parser.add_argument("event")
+    parser.add_argument("--host", choices=list(HOSTS), default=CLAUDE_CODE)
     parser.add_argument("--config", type=Path, default=Path("blindfold.yaml"))
     args = parser.parse_args(argv)
 
-    protects = args.event == hooks.POST_TOOL_USE
+    if args.event not in hooks.events_for(args.host):
+        parser.error(
+            f"event {args.event!r} is not available for {args.host}; "
+            f"choose from {', '.join(hooks.events_for(args.host))}"
+        )
+
+    protects = args.event in (hooks.PRE_TOOL_USE, hooks.POST_TOOL_USE)
 
     def fail(message: str) -> int:
         print(f"[blindfold] {message}", file=sys.stderr)
         if protects:
-            print(json.dumps({"decision": "block", "reason": f"Blindfold: {message}"}))
+            response = hooks.failure_response(args.host, args.event, message)
+            if response is not None:
+                print(json.dumps(response))
         return 0
 
     try:
@@ -135,6 +146,7 @@ def run_hook(argv: list[str]) -> int:
             config=config,
             store=store,
             policy=SessionBoundPolicy(),
+            host=args.host,
         )
     except Exception as exc:
         # Only the exception type, never its message: the same reasoning as the

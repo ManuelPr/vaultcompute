@@ -1,0 +1,24 @@
+{
+  "name": "blindfold-codex",
+  "version": "0.1.0",
+  "description": "Keeps configured local tool-result fields out of Codex model context.",
+  "author": {
+    "name": "Manuel Pernigotto",
+    "email": "57464413+ManuelPr@users.noreply.github.com"
+  },
+  "homepage": "https://github.com/ManuelPr/blindfold",
+  "repository": "https://github.com/ManuelPr/blindfold",
+  "keywords": ["privacy", "tool-results", "tokenization", "codex"],
+  "interface": {
+    "displayName": "Blindfold for Codex",
+    "shortDescription": "Tokenize protected local tool results.",
+    "longDescription": "Blindfold replaces configured fields in local tool results before Codex continues. Codex has no display-only reveal hook, so placeholders remain visible to the user.",
+    "developerName": "Manuel Pernigotto",
+    "category": "Productivity",
+    "capabilities": ["Interactive"],
+    "defaultPrompt": [
+      "Explain which Blindfold tool results are protected."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

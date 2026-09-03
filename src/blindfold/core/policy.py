@@ -21,3 +21,9 @@ class SessionBoundPolicy(DetokenizePolicy):
             record.policy.can_be_input_to_compute
             and context.session_id == record.session_id
         )
+
+    def can_query(self, context: DetokenizeContext, record: VaultRecord) -> bool:
+        return (
+            record.policy.can_be_input_to_query
+            and context.session_id == record.session_id
+        )

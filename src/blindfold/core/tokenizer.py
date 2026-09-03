@@ -46,6 +46,11 @@ def validate_path(path: str) -> None:
     body = path[1:]
     if body.startswith("."):
         body = body[1:]
+    if not body:
+        raise ValueError(
+            "the document root '$' cannot be replaced by this tokenizer. "
+            f"Declare a field below the root. {_DIALECT}"
+        )
     if body.endswith("."):
         raise ValueError(f"path ends with '.': {path!r}. {_DIALECT}")
 
@@ -110,7 +115,10 @@ def tokenize_result(
                     created_at=now,
                     ttl=ttl,
                     lineage=Lineage(op="tool_result", tool=tool_name, path=path),
-                    policy=Policy(),
+                    # A table has a deliberately constrained query surface.
+                    # Letting arbitrary Python resolve it would bypass that
+                    # surface and re-open extraction and sandbox risks.
+                    policy=Policy(can_be_input_to_compute=False),
                     table=schema,
                 )
             )
@@ -155,7 +163,9 @@ def describe_tables(tables: list[tuple[str, TableSchema]]) -> str | None:
     )
 
 
-def describe_schema(fields: list[SchemaField]) -> str | None:
+def describe_schema(
+    fields: list[SchemaField], *, allow_python_compute: bool = True
+) -> str | None:
     """Describe what a tool's protected fields *mean*, for the tool's description.
 
     The model otherwise has only the JSON key name to go on, which is worthless
@@ -172,10 +182,14 @@ def describe_schema(fields: list[SchemaField]) -> str | None:
     for field in fields:
         meta = ", ".join(m for m in (field.semantic_type, field.unit) if m)
         lines.append(f"  {field.path}{f' — {meta}' if meta else ''}")
+    operation_note = (
+        "pass a placeholder to blindfold_compute to operate on it"
+        if allow_python_compute
+        else "the controlled profile does not let the model compute on these scalar placeholders"
+    )
     return (
         "Blindfold: values at these paths come back as ⟦tok_…⟧ placeholders, "
-        "not real values. You cannot read them — pass a placeholder to "
-        "blindfold_compute to operate on it.\n" + "\n".join(lines)
+        f"not real values. You cannot read them — {operation_note}.\n" + "\n".join(lines)
     )
 
 

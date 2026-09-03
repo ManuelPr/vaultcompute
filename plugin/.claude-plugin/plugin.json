@@ -2,5 +2,9 @@
   "name": "blindfold",
   "description": "Keeps values from your private tools out of the model's context, and shows you the real ones on screen.",
   "version": "0.0.1",
+  "author": {
+    "name": "Manuel Pernigotto",
+    "email": "57464413+ManuelPr@users.noreply.github.com"
+  },
   "homepage": "https://github.com/ManuelPr/blindfold"
 }

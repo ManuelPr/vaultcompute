@@ -19,12 +19,15 @@ from blindfold.config import (
     table_schemas_for,
 )
 from blindfold.core.lineage import Column, TableSchema
+from blindfold.core.capabilities import TableQueryCapability
 from blindfold.core.policy import SessionBoundPolicy
 from blindfold.core.rehydrator import rehydrate
 from blindfold.core.sqlite_store import SQLiteTokenStore
 from blindfold.core.table import run_query
 from blindfold.core.tokenizer import describe_tables, tokenize_result
 from blindfold.core.vault import MemoryTokenStore
+from blindfold.sandbox.subprocess_ import SubprocessSandbox
+from blindfold.tools.blindfold_compute import handle_blindfold_compute
 from blindfold.tools.blindfold_table import handle_blindfold_table
 
 TTL = datetime.now(tz=timezone.utc) + timedelta(hours=1)
@@ -166,6 +169,8 @@ def test_a_declared_list_becomes_one_token():
     assert len(records) == 1, "one token for the whole table"
     assert records[0].dtype == "table"
     assert records[0].table == SCHEMA
+    assert records[0].policy.can_be_input_to_query
+    assert not records[0].policy.can_be_input_to_compute
 
 
 def test_five_hundred_rows_still_mint_one_token():
@@ -224,6 +229,75 @@ def test_the_tool_returns_a_placeholder_never_a_value():
     result = _query(store, _table_token(store), [{"op": "max", "column": "salary"}])
     assert result.startswith("⟦tok_")
     assert store.resolve(result) == 71000
+
+
+def test_a_table_token_cannot_bypass_the_query_language_through_python():
+    store = MemoryTokenStore()
+    token = _table_token(store)
+    with pytest.raises(ValueError, match="policy denied"):
+        handle_blindfold_compute(
+            {"code": f"result = resolve('{token}')", "inputs": [token]},
+            store=store,
+            policy=SessionBoundPolicy(),
+            sandbox=SubprocessSandbox(),
+            session_id=SESSION,
+            ttl_seconds=3600,
+        )
+
+
+def test_a_table_result_cannot_be_used_as_a_fresh_python_oracle_token():
+    store = MemoryTokenStore()
+    count = _query(
+        store,
+        _table_token(store),
+        [
+            {"op": "filter", "column": "salary", "cmp": ">", "value": 70000},
+            {"op": "count"},
+        ],
+    )
+    with pytest.raises(ValueError, match="policy denied"):
+        handle_blindfold_compute(
+            {"code": f"result = 1 / 0 if resolve('{count}') > 0 else 'ok'", "inputs": [count]},
+            store=store,
+            policy=SessionBoundPolicy(),
+            sandbox=SubprocessSandbox(),
+            session_id=SESSION,
+            ttl_seconds=3600,
+        )
+
+
+def test_mode_b_can_require_an_exact_trusted_side_capability():
+    store = MemoryTokenStore()
+    token = _table_token(store)
+    ops = [{"op": "filter", "column": "salary", "cmp": ">", "value": 70000}]
+    capability = TableQueryCapability.issue(
+        session_id=SESSION,
+        table_token=token,
+        ops=ops,
+        expires_at=datetime.now(tz=timezone.utc) + timedelta(minutes=5),
+    )
+    result = handle_blindfold_table(
+        {"table": token, "ops": ops},
+        store=store,
+        policy=SessionBoundPolicy(),
+        session_id=SESSION,
+        ttl_seconds=3600,
+        capability=capability,
+        require_capability=True,
+    )
+    assert store.resolve(result) == [ROWS[0]]
+
+    changed = [{"op": "filter", "column": "salary", "cmp": ">", "value": 71000}]
+    with pytest.raises(ValueError, match="not authorized"):
+        handle_blindfold_table(
+            {"table": token, "ops": changed},
+            store=store,
+            policy=SessionBoundPolicy(),
+            session_id=SESSION,
+            ttl_seconds=3600,
+            capability=capability,
+            require_capability=True,
+        )
 
 
 def test_a_row_result_can_be_queried_again():

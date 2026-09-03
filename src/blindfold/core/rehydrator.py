@@ -12,19 +12,20 @@ import re
 from blindfold.ports.policy import DetokenizeContext, DetokenizePolicy
 from blindfold.ports.token_store import TokenStore
 
-# 16 hex is what `mint_token` produces now; 8 is what it produced before, and a
-# persistent vault outlives the version that filled it. Matching both keeps
+# 32 hex is what `mint_token` produces now; 8 and 16 are older widths, and a
+# persistent vault outlives the version that filled it. Matching all keeps
 # yesterday's placeholders — already sitting in conversation history — resolving
 # after an upgrade. A width that matches but is not in the vault rehydrates to
 # `[unknown token]`, which is the same answer any unknown token gets.
-TOKEN_PATTERN = re.compile(r"⟦tok_[0-9a-f]{8}(?:[0-9a-f]{8})?⟧")
+TOKEN_PATTERN = re.compile(r"⟦tok_[0-9a-f]{8}(?:[0-9a-f]{8})?(?:[0-9a-f]{16})?⟧")
 
 PLACEHOLDER_PROMPT = (
     "Some tool results in this conversation come back as ⟦tok_…⟧ placeholders "
     "instead of real values. You cannot read them, and guessing at them is always wrong.\n\n"
-    "To compare, sort, aggregate or otherwise derive from them, call the `blindfold_compute` "
-    "tool and pass every placeholder your code resolves in its `inputs` array. It returns a "
-    "new placeholder, never a value.\n\n"
+    "Use only the Blindfold operation tools exposed in this session. `blindfold_table` is the "
+    "controlled interface for declared tables. `blindfold_compute` may be absent; when present "
+    "it is an explicit unsafe profile for cooperative models. Every operation returns a new "
+    "placeholder, never a value.\n\n"
     "Reproduce placeholders VERBATIM in your answers — never invent, alter, shorten or "
     "paraphrase them. The real values are put back in their place after you are done; a "
     "mangled placeholder shows the user nothing.\n\n"

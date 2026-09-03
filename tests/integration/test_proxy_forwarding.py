@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-TOKEN_RE = re.compile(r"⟦tok_[0-9a-f]{16}⟧")
+TOKEN_RE = re.compile(r"⟦tok_[0-9a-f]{32}⟧")
 
 
 @pytest_asyncio.fixture()
@@ -29,6 +29,8 @@ schemas:
       - path: $.salary
         semantic_type: salary
         unit: EUR/year
+compute:
+  mode: python_unsafe
 """,
         encoding="utf-8",
     )

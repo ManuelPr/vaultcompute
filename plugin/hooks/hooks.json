@@ -7,6 +7,14 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "blindfold hook pre-tool-use" }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "*",

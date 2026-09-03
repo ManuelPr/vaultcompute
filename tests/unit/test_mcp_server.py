@@ -12,6 +12,7 @@ import pytest
 from blindfold import hooks, mcp_server
 from blindfold.config import (
     BlindfoldConfig,
+    ComputeConfig,
     SensitiveFieldConfig,
     StorageConfig,
     ToolSchemaConfig,
@@ -31,7 +32,8 @@ def config():
             TOOL: ToolSchemaConfig(
                 sensitive_fields=[SensitiveFieldConfig(path="$.salary", semantic_type="salary")]
             )
-        }
+        },
+        compute=ComputeConfig(mode="python_unsafe"),
     )
 
 
@@ -88,6 +90,17 @@ def test_unknown_token_is_refused(store):
 def test_no_inputs_is_refused(store):
     with pytest.raises(ValueError, match="at least one token"):
         mcp_server.session_of_inputs([], store)
+
+
+def test_arbitrary_python_requires_explicit_config_opt_in(store):
+    with pytest.raises(ValueError, match="python_unsafe"):
+        mcp_server.compute(
+            {"code": "result = 1", "inputs": []},
+            config=BlindfoldConfig(),
+            store=store,
+            sandbox=SubprocessSandbox(),
+            policy=SessionBoundPolicy(),
+        )
 
 
 # --- the whole Mode C loop ------------------------------------------------

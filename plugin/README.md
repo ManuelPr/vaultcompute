@@ -1,15 +1,19 @@
 # Blindfold — Claude Code plugin
 
-Keeps values from your private tools out of the model's context, lets the model
-still compute with them, and shows you the real ones on screen.
+**Status: experimental host adapter.** Its boundary depends on the event and
+replacement contracts of the installed Claude Code version.
 
-## The four pieces
+Protects declared fields in the supported result shapes, offers the operation
+profile selected by the operator, and shows authorized values on screen.
+
+## The five pieces
 
 | Piece | Effect |
 |---|---|
-| `SessionStart` hook | Before the first prompt, tells the model which paths come back as `⟦tok_…⟧`, what they mean, that `blindfold_compute` is how to operate on them, and to reproduce placeholders verbatim. |
-| `PostToolUse` hook | Replaces declared fields in a tool result with placeholders **before the model sees them**. Applies to every tool — MCP servers, `Bash`, `Read`, `WebFetch`. |
-| `blindfold` MCP server | Offers `blindfold_compute` (the model submits code over placeholders, gets a new placeholder back, never a value) and `blindfold_table` (a fixed set of operations — filter, sort, aggregate — over a whole hidden list behind one collective token, no sandbox involved). |
+| `SessionStart` hook | Before the first prompt, tells the model which paths come back as `⟦tok_…⟧`, what they mean, which operation profile is active, and to reproduce placeholders verbatim. |
+| `PreToolUse` hook | Refuses a configured built-in tool before it runs when Blindfold has no tested way to rebuild that tool's result safely. |
+| `PostToolUse` hook | Replaces declared fields before the model sees them, while preserving the result shape Claude Code expects. The audited adapters currently cover MCP tools with one JSON text part and JSON written to standard output by `Bash` or `PowerShell`. |
+| `blindfold` MCP server | Offers `blindfold_table` for declared tables by default. `blindfold_compute` appears only with `compute.mode: python_unsafe`. |
 | `MessageDisplay` hook | Puts the real values back **on screen only**. The transcript keeps the placeholders, so nothing re-enters the model's context on the next turn. |
 
 The first and third exist because a host's hook system **cannot add a tool or
@@ -49,6 +53,9 @@ storage:
 tokens:
   default_ttl: 3600
 
+compute:
+  mode: controlled          # use python_unsafe only for a cooperative model
+
 schemas:
   mcp__hr__get_salary:      # Claude Code names MCP tools mcp__<server>__<tool>
     sensitive_fields:
@@ -69,8 +76,8 @@ start.
 ## What you will see
 
 Ask something that reaches a protected tool. The model works with placeholders
-throughout — including when it calls `blindfold_compute` to compare or aggregate
-them — and your screen shows the real values in the final answer.
+throughout and, for declared tables, uses controlled operations. Your screen
+shows authorized real values in the final answer.
 
 To confirm it is actually working rather than quietly doing nothing, look at the
 transcript: the tool results and the assistant message there should still
@@ -85,6 +92,13 @@ reports any hidden value that made it through.
   passed through. Blindfold cannot tell which part of a free-text answer is
   sensitive, and letting it through would send the values it was asked to
   protect straight to the model.
+- **A configured built-in without an audited result adapter is refused before
+  it runs.** Today that includes tools such as `Read` and `WebFetch`. They are
+  not silently treated like `Bash`: each host tool has its own result shape,
+  and returning the wrong shape can make Claude Code ignore the replacement.
+- **A configured result whose declared paths no longer match stops the turn.**
+  This catches an upstream response change at the privacy boundary instead of
+  letting an apparently protected tool continue with a cleartext result.
 - **Undeclared tools are untouched.** That is intended, and it means the
   protection is exactly as good as your `schemas` section.
 - **The MCP server infers the session from the tokens it is given.** An MCP
@@ -100,11 +114,31 @@ reports any hidden value that made it through.
   the hook returns immediately when the text contains no placeholders. The text
   to check arrives under `delta` (the newly-completed-lines chunk), not the
   whole message.
-- **`blindfold_compute` calls on the same token are rate-limited** —
+- **If `python_unsafe` is enabled, `blindfold_compute` calls on the same token are rate-limited** —
   `compute.max_calls_per_token` (default 8) within `compute.rate_window_s`
   (default 60) — to bound how fast a model probing for a hidden value one bit
   at a time (see [`../LIMITATIONS.md`](../LIMITATIONS.md)) can extract it.
   Ordinary reuse of a token spread across a session is unaffected; only a burst
   on one token trips it.
+- **Host telemetry is outside this guarantee.** Blindfold rewrites the result
+  before the next model request. A host may have recorded the original tool
+  result locally or in its own telemetry before the hook ran.
+
+## Compatibility check against a real Claude Code version
+
+Unit and integration tests lock down the event shapes Blindfold accepts. They
+cannot prove that a newly installed Claude Code release still invokes those
+hooks in the same way. The opt-in check below starts one real model turn, so it
+uses your Claude allowance:
+
+```bash
+uv tool install . --force
+uv run python scripts/verify_claude_code.py --expect-version "<exact output of claude --version>"
+```
+
+It calls the fake HR tool with a unique canary, locates Claude Code's persisted
+transcript, and checks that the canary is absent while a Blindfold placeholder
+is present. Authentication is checked before the paid turn; a missing login or
+version mismatch exits without starting it.
 
 See [`../LIMITATIONS.md`](../LIMITATIONS.md) for the full inventory.

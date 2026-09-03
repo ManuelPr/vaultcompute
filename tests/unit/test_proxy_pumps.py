@@ -13,8 +13,8 @@ import re
 
 import pytest
 
-from blindfold.config import BlindfoldConfig, SensitiveFieldConfig, ToolSchemaConfig
-TOKEN_RE = re.compile(r"⟦tok_[0-9a-f]{16}⟧")
+from blindfold.config import BlindfoldConfig, ProxyConfig, SensitiveFieldConfig, ToolSchemaConfig
+TOKEN_RE = re.compile(r"⟦tok_[0-9a-f]{32}⟧")
 
 from blindfold.proxy import _pump_child_to_client, _pump_client_to_child, build_proxy_state
 
@@ -61,24 +61,31 @@ def state():
 BATCH = json.dumps([{"jsonrpc": "2.0", "id": 900, "method": "tools/list", "params": {}}]).encode() + b"\n"
 
 
-async def test_client_to_child_forwards_a_batch_instead_of_raising(state):
-    # A batch is a JSON array. `msg.get()` on a list raises AttributeError,
-    # which killed this task and wedged the pipe with no error to the client.
+async def test_client_to_child_blocks_a_batch_in_strict_mode(state):
     child = _FakeChild()
     written = []
 
     await _pump_client_to_child(_reader([BATCH]), child, written.append, state)
 
-    assert child.stdin.written == [BATCH], "the batch should be forwarded untouched"
-    assert written == [], "nothing should be answered locally"
+    assert child.stdin.written == []
+    assert "strict mode" in json.loads(written[0])[0]["error"]["message"]
 
 
-async def test_child_to_client_forwards_a_batch_instead_of_raising(state):
+async def test_child_to_client_blocks_a_batch_in_strict_mode(state):
     written = []
 
     await _pump_child_to_client(_FakeChild([BATCH]), written.append, state)
 
-    assert written == [BATCH]
+    assert "strict mode" in json.loads(written[0])["error"]["message"]
+
+
+async def test_batches_are_forwarded_only_when_permissive():
+    state = build_proxy_state(BlindfoldConfig(proxy=ProxyConfig(strict=False)))
+    child = _FakeChild()
+    written = []
+    await _pump_client_to_child(_reader([BATCH]), child, written.append, state)
+    assert child.stdin.written == [BATCH]
+    assert written == []
 
 
 async def test_a_normal_request_still_reaches_the_child(state):
@@ -106,14 +113,14 @@ async def test_rehydrate_is_answered_locally_and_never_forwarded(state):
     assert json.loads(written[0])["result"]["text"] == "hi"
 
 
-async def test_malformed_json_from_the_child_is_passed_through(state):
-    # Not ours to fix, and swallowing it would hide the downstream's problem.
+async def test_malformed_json_from_the_child_is_blocked_in_strict_mode(state):
     junk = b"this is not json\n"
     written = []
 
     await _pump_child_to_client(_FakeChild([junk]), written.append, state)
 
-    assert written == [junk]
+    assert written != [junk]
+    assert "invalid JSON" in json.loads(written[0])["error"]["message"]
 
 
 # --- resources carry data too ---------------------------------------------
@@ -205,6 +212,8 @@ async def test_a_declared_resource_that_is_not_json_is_not_silently_forwarded(re
     )
 
     assert "did not return JSON" in capsys.readouterr().err
+    assert "71000" not in written[0].decode()
+    assert "error" in json.loads(written[0])
 
 
 # --- the model has to be able to copy a placeholder back --------------------
@@ -254,6 +263,43 @@ async def test_the_placeholder_reaches_the_model_unescaped(salary_state):
 async def test_a_tokenized_result_still_parses_as_json(salary_state):
     text = await _tokenized_text(salary_state, {"name": "Andrea", "salary": 71000})
     assert json.loads(text)["name"] == "Andrea"
+
+
+async def _protected_response(state, content):
+    request = json.dumps(
+        {"jsonrpc": "2.0", "id": 41, "method": "tools/call", "params": {"name": "get_salary"}}
+    ).encode() + b"\n"
+    await _pump_client_to_child(_reader([request]), _FakeChild(), [].append, state)
+    response = json.dumps(
+        {"jsonrpc": "2.0", "id": 41, "result": {"content": content}}
+    ).encode() + b"\n"
+    written = []
+    await _pump_child_to_client(_FakeChild([response]), written.append, state)
+    return json.loads(written[0])
+
+
+async def test_protected_non_json_text_is_blocked_without_echoing_it(salary_state):
+    out = await _protected_response(
+        salary_state, [{"type": "text", "text": "Andrea earns 71000"}]
+    )
+    assert "error" in out
+    assert "71000" not in json.dumps(out)
+
+
+async def test_protected_non_text_content_is_blocked(salary_state):
+    out = await _protected_response(
+        salary_state, [{"type": "image", "data": "base64-containing-private-data"}]
+    )
+    assert "error" in out
+    assert "private-data" not in json.dumps(out)
+
+
+async def test_declared_path_shape_drift_is_blocked(salary_state):
+    out = await _protected_response(
+        salary_state, [{"type": "text", "text": json.dumps({"annual_salary": 71000})}]
+    )
+    assert "error" in out
+    assert "71000" not in json.dumps(out)
 
 
 async def test_resources_are_unescaped_too(resource_state):

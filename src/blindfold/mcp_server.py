@@ -1,7 +1,7 @@
-"""A one-tool MCP server exposing `blindfold_compute`.
+"""The profile-gated MCP operation server used by host integrations.
 
-Mode A injects this tool into the `tools/list` response as it passes the proxy.
-Mode B adds it to the tool list you build yourself. Mode C could do neither —
+Mode A injects permitted tools into the `tools/list` response as it passes the proxy.
+Mode B adds them to the tool list the application builds. Mode C could do neither —
 no hook can add a tool or edit a tool description — so in a host, blind compute
 has to arrive the way every other tool does: as an MCP server the host starts.
 
@@ -84,6 +84,11 @@ def compute(
     Separate from the MCP handler so it can be exercised without building
     protocol objects — the handler below is only a wrapper.
     """
+    if config.compute.mode != "python_unsafe":
+        raise ValueError(
+            "blindfold_compute is disabled; set compute.mode: python_unsafe "
+            "only if the cooperative-model risk is acceptable"
+        )
     session_id = session_of_inputs(list(arguments.get("inputs") or []), store)
     return handle_blindfold_compute(
         arguments,
@@ -105,6 +110,8 @@ def query_table(
     policy: DetokenizePolicy,
 ) -> str:
     """One table query, session inferred from the table token, as for compute."""
+    if config.compute.mode == "disabled":
+        raise ValueError("blindfold_table is disabled by compute.mode")
     session_id = session_of_inputs([arguments.get("table")], store)
     return handle_blindfold_table(
         arguments,
@@ -119,7 +126,14 @@ def build_server(config: BlindfoldConfig, store: TokenStore) -> Server:
     server = Server("blindfold")
     sandbox = SubprocessSandbox()
     policy = SessionBoundPolicy()
-    specs = [build_tool_definition(), build_table_tool_definition()]
+    specs = []
+    if config.compute.mode == "python_unsafe":
+        specs.append(build_tool_definition())
+    if (
+        config.compute.mode != "disabled"
+        and any(tool.tables for tool in config.schemas.values())
+    ):
+        specs.append(build_table_tool_definition())
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
@@ -140,7 +154,7 @@ def build_server(config: BlindfoldConfig, store: TokenStore) -> Server:
             except ValueError as exc:
                 return [TextContent(type="text", text=f"blindfold_table error: {exc}")]
             return [TextContent(type="text", text=token)]
-        if name != BLINDFOLD_COMPUTE_TOOL_NAME:
+        if name != BLINDFOLD_COMPUTE_TOOL_NAME or config.compute.mode != "python_unsafe":
             raise ValueError(f"unknown tool: {name}")
         # ponytail: the sandbox runs synchronously, so a compute blocks this
         # server for its whole timeout. One user, one call at a time, so it does

@@ -108,6 +108,115 @@ def test_tool_without_declared_fields_is_left_alone(config, vault_path):
         store.close()
 
 
+def test_pre_tool_use_denies_a_configured_builtin_without_an_output_adapter(vault_path):
+    config = BlindfoldConfig(
+        schemas={
+            "Read": ToolSchemaConfig(
+                sensitive_fields=[SensitiveFieldConfig(path="$.salary")]
+            )
+        }
+    )
+    out = hooks.handle_pre_tool_use(
+        {"tool_name": "Read", "tool_input": {"file_path": "salary.json"}},
+        config=config,
+    )
+    decision = out["hookSpecificOutput"]
+    assert decision["hookEventName"] == "PreToolUse"
+    assert decision["permissionDecision"] == "deny"
+    assert "salary.json" not in decision["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize("tool", [TOOL, "Bash", "PowerShell"])
+def test_pre_tool_use_allows_only_supported_protected_shapes(config, tool):
+    if tool == TOOL:
+        selected = config
+    else:
+        selected = BlindfoldConfig(
+            schemas={
+                tool: ToolSchemaConfig(
+                    sensitive_fields=[SensitiveFieldConfig(path="$.salary")]
+                )
+            }
+        )
+    assert hooks.handle_pre_tool_use({"tool_name": tool}, config=selected) is None
+
+
+def test_bash_rewrite_preserves_the_documented_output_shape(vault_path):
+    config = BlindfoldConfig(
+        schemas={
+            "Bash": ToolSchemaConfig(
+                sensitive_fields=[SensitiveFieldConfig(path="$.salary")]
+            )
+        }
+    )
+    event = {
+        "session_id": SESSION,
+        "tool_name": "Bash",
+        "tool_response": {
+            "stdout": '{"salary": 71000, "status": "ok"}',
+            "stderr": "",
+            "interrupted": False,
+            "isImage": False,
+        },
+    }
+    store = _store(vault_path)
+    try:
+        out = hooks.handle_post_tool_use(event, config=config, store=store)
+    finally:
+        store.close()
+
+    replacement = out["hookSpecificOutput"]["updatedToolOutput"]
+    assert set(replacement) == {"stdout", "stderr", "interrupted", "isImage"}
+    assert replacement["stderr"] == ""
+    assert replacement["interrupted"] is False
+    assert json.loads(replacement["stdout"])["salary"].startswith("⟦tok_")
+    assert "71000" not in json.dumps(replacement)
+
+
+def test_bash_with_unclassified_stderr_stops_before_another_model_request(vault_path):
+    config = BlindfoldConfig(
+        schemas={
+            "Bash": ToolSchemaConfig(
+                sensitive_fields=[SensitiveFieldConfig(path="$.salary")]
+            )
+        }
+    )
+    event = {
+        "session_id": SESSION,
+        "tool_name": "Bash",
+        "tool_response": {
+            "stdout": '{"salary": 71000}',
+            "stderr": "secret salary 71000",
+            "interrupted": False,
+            "isImage": False,
+        },
+    }
+    store = _store(vault_path)
+    try:
+        out = hooks.handle_post_tool_use(event, config=config, store=store)
+    finally:
+        store.close()
+    assert out["continue"] is False
+    assert "71000" not in out["stopReason"]
+
+
+def test_declared_path_that_no_longer_matches_stops_instead_of_passing_through(
+    config, vault_path
+):
+    store = _store(vault_path)
+    try:
+        out = hooks.handle_post_tool_use(
+            _mcp_post_tool_use_event('{"compensation": 71000}'),
+            config=config,
+            store=store,
+        )
+    finally:
+        store.close()
+    assert out["continue"] is False
+    assert "declared protected paths" in out["stopReason"]
+    assert "71000" not in out["stopReason"]
+
+
 @pytest.mark.parametrize(
     "output",
     ["not json at all", "", None, 71000],
@@ -123,11 +232,11 @@ def test_declared_tool_that_cannot_be_tokenized_is_blocked(config, vault_path, o
         )
     finally:
         store.close()
-    assert out["decision"] == "block"
-    assert TOOL in out["reason"]
+    assert out["continue"] is False
+    assert TOOL in out["stopReason"]
 
 
-def test_the_no_text_output_block_names_the_events_shape_without_its_values(config, vault_path):
+def test_the_no_text_output_stops_without_echoing_its_values(config, vault_path):
     # A shape this project has never seen and still can't extract from: no
     # tool_output, and tool_response isn't the single-text-part list either.
     # The reason must still say why, without ever repeating a real value.
@@ -144,10 +253,10 @@ def test_the_no_text_output_block_names_the_events_shape_without_its_values(conf
         )
     finally:
         store.close()
-    assert out["decision"] == "block"
-    assert "tool_response" in out["reason"]
-    assert "71000" not in out["reason"]
-    assert "Andrea Tuscano" not in out["reason"]
+    assert out["continue"] is False
+    assert "not JSON" in out["stopReason"]
+    assert "71000" not in out["stopReason"]
+    assert "Andrea Tuscano" not in out["stopReason"]
 
 
 # --- tool_response: the actual shape a real host sends for MCP tools -------
@@ -187,9 +296,11 @@ def test_the_real_mcp_event_shape_is_tokenized(config, vault_path):
     finally:
         store.close()
     assert "decision" not in (out or {})
-    rewritten = json.loads(out["hookSpecificOutput"]["updatedToolOutput"])
+    replacement = out["hookSpecificOutput"]["updatedToolOutput"]
+    assert isinstance(replacement, list), "MCP result shape must be preserved"
+    rewritten = json.loads(replacement[0]["text"])
     assert rewritten["salary"].startswith("⟦tok_")
-    assert "71000" not in out["hookSpecificOutput"]["updatedToolOutput"]
+    assert "71000" not in json.dumps(replacement)
 
 
 def test_multiple_content_parts_are_not_guessed_at(config, vault_path):
@@ -207,8 +318,8 @@ def test_multiple_content_parts_are_not_guessed_at(config, vault_path):
         )
     finally:
         store.close()
-    assert out["decision"] == "block"
-    assert "71000" not in out["reason"]
+    assert out["continue"] is False
+    assert "71000" not in out["stopReason"]
 
 
 def test_a_non_text_content_part_is_not_guessed_at(config, vault_path):
@@ -221,7 +332,7 @@ def test_a_non_text_content_part_is_not_guessed_at(config, vault_path):
         )
     finally:
         store.close()
-    assert out["decision"] == "block"
+    assert out["continue"] is False
 
 
 # --- MessageDisplay -------------------------------------------------------
@@ -318,7 +429,7 @@ def test_another_session_cannot_reveal_the_token(config, vault_path):
 def test_unknown_event_name_raises(config, vault_path):
     store = _store(vault_path)
     try:
-        with pytest.raises(ValueError, match="unknown hook event"):
+        with pytest.raises(ValueError, match="unknown claude-code hook event"):
             hooks.dispatch(
                 "nope", {}, config=config, store=store, policy=SessionBoundPolicy()
             )
@@ -356,7 +467,7 @@ def test_cli_blocks_when_the_vault_cannot_be_shared(monkeypatch, capsys, tmp_pat
         cfg,
     )
     assert code == 0
-    assert json.loads(out.out)["decision"] == "block"
+    assert json.loads(out.out)["continue"] is False
     assert "sqlite" in out.err
 
 
@@ -400,7 +511,7 @@ def test_cli_blocks_on_unreadable_input(monkeypatch, capsys, tmp_path, vault_pat
     code = run_hook([hooks.POST_TOOL_USE, "--config", str(cfg)])
     out = capsys.readouterr()
     assert code == 0
-    assert json.loads(out.out)["decision"] == "block"
+    assert json.loads(out.out)["continue"] is False
 
 
 def test_cli_never_puts_an_exception_message_in_its_output(monkeypatch, capsys, tmp_path, vault_path):

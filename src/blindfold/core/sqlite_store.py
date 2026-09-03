@@ -164,6 +164,7 @@ class SQLiteTokenStore(TokenStore):
                     {
                         "reveal_to_frontend": record.policy.reveal_to_frontend,
                         "can_be_input_to_compute": record.policy.can_be_input_to_compute,
+                        "can_be_input_to_query": record.policy.can_be_input_to_query,
                     }
                 ),
                 None
@@ -330,6 +331,10 @@ def _from_row_with(open_value, row: sqlite3.Row) -> VaultRecord:
         policy=Policy(
             reveal_to_frontend=policy["reveal_to_frontend"],
             can_be_input_to_compute=policy["can_be_input_to_compute"],
+            # Existing vaults predate the split between constrained queries
+            # and arbitrary compute, so preserve their former permissive
+            # behaviour unless a newer record says otherwise.
+            can_be_input_to_query=policy.get("can_be_input_to_query", True),
         ),
         table=None
         if row["table_schema"] is None

@@ -17,15 +17,16 @@ A few entries are marked **Fix: none** inside the MVP section — that means the
 
 ## Deployment surface (context for the limits below)
 
-Blindfold has three integration modes; a few of the limits below apply to only one of them.
+Blindfold has four integration modes; a few of the limits below apply to only one of them.
 
-- **Mode A: CLI proxy** — `blindfold -- <mcp-server>`, wraps a stdio MCP server. Requires that your app already speak MCP (Claude Desktop, Cursor, custom agent on the `mcp` client SDK, etc.). **Protects, but does not deliver:** with a client you did not write, the values never come back — read [Rehydration requires a client you control](#rehydration-requires-a-client-you-control) before choosing this mode.
-- **Mode B: In-process library** — `from blindfold import ...`, called from your existing agent loop. Works with any LLM SDK (Anthropic, OpenAI, Gemini, self-hosted, LangChain, LlamaIndex, …); no MCP required.
-- **Mode C: Claude Code plugin** — three host hooks plus a one-tool MCP server, instead of a proxy. Tokenizes every tool rather than only MCP servers, and reveals values on screen while the transcript keeps the placeholders. **Requires `storage.backend: sqlite`**, since each hook run and the server are separate processes. See [`plugin/README.md`](plugin/README.md).
+- **Mode A: CLI proxy (beta)** — strict declared-JSON protection, but no final display control with third-party clients.
+- **Mode B: In-process library (reference)** — the application owns tokenization, capability authorization and final rehydration.
+- **Mode C: Claude Code plugin (experimental)** — supported host result adapters plus display-only reveal; version-sensitive and requires SQLite.
+- **Mode D: Codex plugin (experimental guardrail)** — supported local hook paths only, no display-only reveal, and requires SQLite.
 
 For a user-facing comparison — what each mode can and cannot do, and how to choose — see [`docs/modes.md`](docs/modes.md).
 
-Unless a bullet is tagged `[Mode A only]`, `[Mode B only]` or `[Mode C only]`, the limit applies to all of them. See [`docs/architecture.md#3-two-integration-modes`](docs/architecture.md#3-two-integration-modes) for the full picture.
+Unless a bullet is tagged for a specific mode, the limit applies to all of them. See [`docs/modes.md`](docs/modes.md) and [`docs/host-adapters.md`](docs/host-adapters.md) for the full picture.
 
 ---
 
@@ -41,19 +42,22 @@ Blindfold can put placeholders into the model's context. It cannot take them out
 
 Concretely, wrapping your server with `blindfold -- …` under Claude Desktop, Cursor, Zed or any other client you did not write produces an assistant that answers:
 
-> The higher earner is ⟦tok_9c1bf051⟧.
+> The higher earner is ⟦tok_9c1bf051f23546eeb0e5d29276da9217⟧.
 
 and stops there. The values are genuinely protected — the provider never saw them — but the end user cannot read the answer either.
 
 This is structural *within MCP*. The proxy sits on the tool channel, underneath the client; the assistant's final message never passes through it, and the protocol gives a server no hook on what the model says. The obvious workaround — exposing rehydration as an ordinary tool the model can call — defeats the entire design, because a tool result goes into the model's context, which is exactly where the real values must not go.
 
-**The escape is a host feature, not a protocol one.** A host that offers its own hook on displayed text can do what MCP cannot. Claude Code does: `MessageDisplay` rewrites what appears on screen while leaving the transcript untouched — see Mode C in the [README](README.md#quick-start) and [`plugin/`](plugin/README.md). That is not a loophole in this limit, it is the limit's shape: rehydration needs someone who owns the final message, and a host owns it even when your application does not.
+**The escape is a host feature, not a protocol one.** A host that offers its own hook on displayed text can do what MCP cannot. Claude Code does: `MessageDisplay` rewrites what appears on screen while leaving the transcript untouched — see Mode C in the [README](README.md#quick-start) and [`plugin/`](plugin/README.md). Codex currently does not, so its plugin protects supported results but leaves placeholders visible. That is not a loophole in this limit, it is the limit's shape: rehydration needs someone who owns the final message, and a host owns it only when it exposes that boundary.
 
 **What this means in practice:** Mode A is the right choice when hiding values from the LLM provider is the whole goal and placeholders in the output are acceptable (audit trails, pipelines whose output is consumed by code, a client that will grow support for the custom method). If a human has to read the values, you need Mode B, a client of your own, or a host with a display hook.
 
 ### Blind compute answers one bit per call, whatever the sandbox
 
-`blindfold_compute` either returns a token or raises an error, and the model can choose which by writing code whose *success* depends on a hidden value:
+`blindfold_compute` is absent in the default `controlled` profile. If an
+operator explicitly selects `compute.mode: python_unsafe`, the tool either
+returns a token or raises an error, and the model can choose which by writing
+code whose *success* depends on a hidden value:
 
 ```python
 result = 1 / 0 if resolve("⟦tok_…⟧") > 50000 else "ok"
@@ -63,7 +67,12 @@ Error means "yes". About twenty of those recover an exact salary. Nothing in the
 
 It is listed as by-design because the only thing that removes it is giving up arbitrary code: replacing free-form Python with a fixed set of operations whose control flow cannot depend on the values. That is a change of contract rather than a bug fix — and it has now been made, as a second tool rather than a replacement.
 
-**There is now a path without it.** `blindfold_table` takes a fixed set of operations instead of code, and every well-formed query succeeds — comparisons across types do not match rather than raising, an empty aggregate returns nothing rather than erroring — so no failure carries a bit about the data. Where your data is a list, prefer a collective token and this tool; the oracle below applies only to `blindfold_compute`.
+**The default path does not expose it.** `blindfold_table` takes a fixed set of
+operations instead of code, and every well-formed query succeeds. Table tokens
+and all their derived results carry `can_be_input_to_compute: false`, so a fresh
+count token cannot be handed to Python to reconstruct the same oracle. In Mode
+B, `TableQueryCapability` can additionally bind the exact table, session,
+operation list and expiry authorized by the trusted application.
 
 Three things bound the damage for compute, which still runs arbitrary Python: the policy check runs per input token, so the model can only interrogate values it was already allowed to compute on; each call is one bit, so extraction is visible in the call log as an obvious pattern of repeated compute calls on the same token; and — as of `config.compute` — a token used as compute input more than `max_calls_per_token` times (default 8) within `rate_window_s` seconds (default 60) is refused for the rest of the window.
 
@@ -88,8 +97,12 @@ Blind compute covers **mechanical** operations: compare, sort, aggregate, filter
 
 If your use case requires the model to make a qualitative call on the raw value, no proxy layer can help you. That decision has to happen client-side, after rehydration, in code the model doesn't run.
 
-### `consistency: stable` leaks equality
-When you configure a `semantic_type` with `consistency: stable`, the same underlying value produces the same token every time. That lets the model reason across occurrences of the same entity ("these two rows are the same person"), but the equality relation itself becomes visible to the LLM provider. This is a real trade-off, exposed per semantic type so you decide deliberately. MVP defaults to `consistency: fresh` (new token every time) — no equality leakage, no cross-token identity reasoning.
+### A future `consistency: stable` mode would leak equality
+The current implementation always mints fresh tokens; the `consistency` block
+shown in the planned configuration is not read. If stable tokens are added,
+the same value producing the same token would reveal equality between
+occurrences to the provider. That trade-off must remain explicit rather than
+silently becoming the default.
 
 ### Non-declared paths pass through
 Blindfold only tokenizes JSON fields you declare in `blindfold.yaml`. If a tool returns sensitive data at a path you didn't list (an unexpected error object, a debug blob, a new field the vendor added), that data goes to the model untokenized. Blindfold does **not** do NER, regex sniffing, or heuristic detection over undeclared fields — deterministic behavior is a feature, not a bug.
@@ -132,13 +145,13 @@ Everything below is a current-release gap. All of these are fixable and are call
 
 ### Transport
 
-- ~~**A JSON-RPC batch crashed the proxy.**~~ **Closed.** A batch is a JSON array; the pump called `.get()` on it, raised `AttributeError`, killed its task, and the connection wedged with no error visible to the client. Batches are now forwarded untouched — Blindfold does not inspect them, and saying so is more honest than pretending to.
+- ~~**A JSON-RPC batch crashed or bypassed the proxy.**~~ **Closed in strict mode.** A batch is a JSON array and is not yet inspected element-by-element. The default `proxy.strict: true` rejects it with a JSON-RPC error instead of forwarding uninspected results. `strict: false` restores passthrough for compatibility and is explicitly not a complete privacy boundary.
 
 - ~~**Blind compute blocked the whole proxy.**~~ **Closed.** `handle_blindfold_compute` ran inline in the async pump and the sandbox is synchronous, so for the length of a computation — up to the 5-second timeout — the proxy forwarded nothing in either direction. It now runs in a worker thread, which is why `SQLiteTokenStore` holds a reentrant lock and opens its connection with `check_same_thread=False`.
 
-- ~~**[Mode A only] `resources/*` passes through untouched.**~~ **Closed.** A server exposing salaries as a resource rather than as a tool used to get no protection at all. The proxy now tracks `resources/read` requests and tokenizes the returned contents, driven by a `resources:` config section keyed by **URI glob** — `file:///hr/*.json` — because a URI is what a resource has instead of a name. The URI on the returned part wins over the requested one, so a template read answered with a concrete URI still matches.
+- ~~**[Mode A only] `resources/*` passed through untouched.**~~ **Closed for declared JSON resources in strict mode.** The proxy tracks `resources/read`, matches returned URIs against configured globs and tokenizes JSON text. A declared blob, non-JSON body, empty result or path mismatch is replaced by a safe error rather than forwarded.
 
-  A declared resource that comes back as a blob, or as text that is not JSON, is reported on the operator's stderr. It is still forwarded, because the proxy does not rewrite what it cannot parse — so that is a warning, not a guarantee.
+  In explicit permissive mode those shapes are logged and forwarded for compatibility; do not describe that mode as a security boundary.
 
 - **[Mode A only] `prompts/*` is still not inspected.** Prompt templates are instructions rather than API data and nothing can be declared against them. If your server puts sensitive values inside prompt templates, the proxy will not find them.
 - **CLI proxy is stdio MCP only. [Mode A only]** The `blindfold -- <cmd>` CLI wraps a single downstream stdio MCP server. No HTTP proxy mode for REST APIs, no wrapping of remote/SSE MCP servers. Mode B (in-process library) has no transport concept — it plugs into any LLM SDK loop directly, MCP or not.
@@ -152,7 +165,7 @@ Everything below is a current-release gap. All of these are fixable and are call
 
 - **A declared-but-unprotectable PostToolUse result is diagnosed, not just refused.** The block reason for "no usable text" now includes the event's key names and Python types — never values, since the event can legitimately hold the real hidden data at that point. This is how the `tool_response` finding below was made: the diagnostic showed the real shape on the first live reproduction instead of leaving it a mystery.
 
-- ~~**MCP tool results were never recognized by `PostToolUse`.**~~ **Closed.** Every general hook-doc example (Edit, Bash) shows the tool's result arriving as `tool_output`, a flat string — and that is what the code originally looked for. A real MCP tool call sends no `tool_output` key at all: the result arrives as `tool_response`, a list mirroring MCP's own content shape, `[{"type": "text", "text": "..."}]`. Every MCP-backed tool with declared fields was blocked, unconditionally, until this was found — which is the entire tool surface Mode C exists to protect. Both shapes are now read; a `tool_response` with more than one part, or a non-text part, is still refused rather than guessed at, consistent with declaring a table and a field inside it as an unresolvable overlap elsewhere in this document.
+- ~~**MCP tool results were never recognized by `PostToolUse`.**~~ **Closed.** The first implementation only read the legacy `tool_output` flat string. A real MCP tool call instead arrived as `tool_response`, a list mirroring MCP's own content shape, `[{"type": "text", "text": "..."}]`. Every MCP-backed tool with declared fields was therefore blocked until this was reproduced. The Claude adapter now accepts that observed list, the object-with-`content` form, and the legacy string while preserving whichever admitted shape it received. A response with more than one part or a non-text part is still refused rather than guessed at.
 
 - ~~**`MessageDisplay` never revealed anything, and looked exactly like a host that never invoked the hook at all.**~~ **Closed — the hook was firing correctly the whole time.** It read `event.get("message_text")`, the field name the general hook documentation uses elsewhere; that key does not exist on this event. The real payload carries `turn_id`, `message_id`, `index`, `final`, and `delta` — "the newly completed lines" of the message as it streams — confirmed only by asking the live host's own `/hooks` inspector to print the schema, since no page of the hosted docs describes it. Reading the wrong key meant the check always failed and the handler always returned `None` — correctly, given what it was looking at, which is exactly why nothing anywhere logged a failure: there was never an error to report, only a field that was never there. A `--debug` log grepped across an entire session for "MessageDisplay" came back empty, `/plugin`'s Errors panel showed nothing, and a second LLM consulted for a diagnosis fabricated a specific, wrong changelog citation to explain it — the field name only came from making the host state its own schema out loud. Fixed by reading `delta`; each delta is handled independently, on the assumption that a placeholder does not span a line break, since deltas are delivered as whole completed lines.
 
@@ -190,8 +203,17 @@ The subprocess sandbox is the one place where real values meet code the model wr
 
 - **Overlapping declarations used to corrupt each other; they are now refused at load.** The tokenizer walks a tool's fields in order, so the same path declared twice tokenized its own placeholder the second time round — the vault held a token whose value was another token, and the user read `⟦tok_…⟧` where the value should have been. A path containing another (`$.employee` alongside `$.employee.salary`) did the same to a subtree. Both are rejected with a message naming the pair. For resources the overlap depends on the URI and cannot be caught statically, so matching globs are merged with the redundant declaration dropped.
 
-- **Non-JSON tool responses are passed through untokenized.** Free-form text hits the model unchanged. Structured JSON responses are required for protection to kick in.
-- **Non-text MCP content parts are passed through untokenized.** Image/resource/blob parts are not protected.
+- **Non-JSON results are not tokenized.** In the proxy and library modes they
+  pass through unless your own loop refuses them. In the Claude Code and Codex
+  adapters, a configured hooked result that is not an accepted JSON shape is
+  stopped or replaced with safe feedback rather than sent onward unchanged.
+- **Non-text MCP content parts are not protected.** The proxy/library leave them
+  untouched. The host adapters refuse a configured multi-part or non-text
+  result because they cannot identify the declared JSON fields inside it.
+- **A missing declared path is mode-dependent.** The core tokenizer keeps it as
+  a no-op so defensive declarations remain cheap in Modes A and B. At the host
+  boundary in Modes C and D, a configured result with no replacements is
+  treated as response-shape drift and fails closed.
 - ~~**No collective (table) tokens.**~~ **Closed.** A list declared under `tables:` becomes one token for the whole thing, and the model is told the column names and what they mean. Measured on 500 employees x 5 fields: 2,500 individual tokens before, **1** after, and the model can answer "top three by salary in Eng" — which it could not do at all with 2,500 opaque strings, having no way to sort them or even tell they were comparable.
 
   The query language is a fixed set of operations (`filter`, `sort_by`, `limit`, `select`, `sum`, `mean`, `min`, `max`, `count`) executed by Blindfold, not code. Results come back as new tokens, and a row result carries the columns that survived, so queries can be built up in steps. **This path runs no sandbox**, because no code the model wrote is ever executed.
@@ -205,22 +227,20 @@ The subprocess sandbox is the one place where real values meet code the model wr
 - **Runtime dtype is not surfaced.** The vault records whether a hidden value is a number, string, or object, but the tool description is built from config alone and cannot know. The model infers it from `semantic_type`/`unit`. Declaring dtype in `blindfold.yaml` would close this if it ever matters.
 - ~~**[Mode B only] `describe_schema()` is exported but nothing calls it for you.**~~ **Closed — this entry was stale.** `examples/demo_chat.py` appends `describe_schema(fields)` per tool before handing the list to the model (each `list_tools()` result gets `describe_schema(schema_fields_for(config, t.name))` folded into its description), and `examples/try_modes.py`'s Mode B walkthrough does the same plus `describe_tables()` for collective tokens. Both landed in `16fc419`, before this document's last pass through the MVP section — the code was already right and the write-up hadn't caught up. `describe_config(config)` remains the alternative for a single up-front briefing instead of per-tool text.
 
-- ~~**The prompt fragment that keeps placeholders intact is not shipped as a constant.**~~ **Closed — same commit, same stale entry.** `PLACEHOLDER_PROMPT` is exported from the package root (`from blindfold import PLACEHOLDER_PROMPT`) and both `examples/demo_chat.py` and `examples/try_modes.py` import it from there rather than defining their own copy. Mode C carries the same text inside the `SessionStart` briefing, so all three modes now draw from one source rather than three drifting paraphrases.
+- ~~**The prompt fragment that keeps placeholders intact is not shipped as a constant.**~~ **Closed — same commit, same stale entry.** `PLACEHOLDER_PROMPT` is exported from the package root (`from blindfold import PLACEHOLDER_PROMPT`) and both `examples/demo_chat.py` and `examples/try_modes.py` import it from there rather than defining their own copy. Modes C and D carry the same text inside the `SessionStart` briefing, so every integration draws from one source rather than drifting paraphrases.
 
 - **Rehydrated values are rendered with `str()`.** For numbers and strings this is what you want. A hidden value that is an object or a list renders as its Python representation (single quotes, `True`/`None`), not JSON. Cosmetic until you hide a structured field.
 
 ### Policy
-- **[Mode C only] The compute server infers the session from its inputs.** An MCP connection carries no session identity, so `blindfold mcp-server` reads the session off the input tokens, refuses to mix two, and mints the result into that session — which is what lets the display hook reveal it rather than rendering `[redacted]`. The consequence, stated plainly: **possession of a token is treated as proof of belonging to its session.** Tokens are unguessable and never leave the trust zone, but they do reach the model, so a model can compute on any token it has seen — which are the tokens of its own session anyway. In Mode A and Mode B the session is known independently and this substitution does not happen.
+- **[Modes C and D only] The compute server infers the session from its inputs.** An MCP connection carries no session identity, so `blindfold mcp-server` reads the session off the input tokens, refuses to mix two, and mints the result into that session — which lets the host-side flow keep working across separate processes. The consequence, stated plainly: **possession of a token is treated as proof of belonging to its session.** Tokens are unguessable and never leave the trust zone, but they do reach the model, so a model can compute on any token it has seen — which are the tokens of its own session anyway. In Modes A and B the session is known independently and this substitution does not happen.
 
   **Fix:** needs a way for the host to tell an MCP server which session it serves. Nothing in MCP provides one today.
 
-- **Only `SessionBoundPolicy` ships.** No `webhook`, `claims`, or `allow_all` implementations yet — though the port is in place so they are additive to build. **Fix: small, one class each**; the wiring already calls `can_reveal` and `can_compute` at the right points.
+- **Only `SessionBoundPolicy` ships.** No `webhook`, `claims`, or `allow_all` implementations yet — though the port is in place so they are additive to build. **Fix: small, one class each**; the wiring calls independent `can_reveal`, `can_compute`, and `can_query` checks. Host events without a usable `session_id` are refused instead of sharing a fallback identity.
 - **Session isolation is per proxy process, not per user.** `SessionBoundPolicy` compares a `session_id` that Mode A generates once per proxy launch. That is real isolation between two runs, and no isolation between two users sharing one run — which is fine because no multi-user deployment exists yet. **Fix:** comes with server mode; the policy contract does not need to change, only who supplies the `session_id`.
 
 ### Packaging
 - **Not published to PyPI.** `pipx install blindfold` / `uv add blindfold` will not get you this project. Install from source. **Fix: trivial** whenever the name and the release are settled.
-- **Cross-platform CI missing** — see Transport above. Developed on Windows; the sandbox findings above show at least one behavior (socket initialization) that differs by platform, so "should work on Linux" is an assumption, not a result.
-
 ---
 
 ## When Blindfold is the wrong tool
@@ -228,8 +248,8 @@ The subprocess sandbox is the one place where real values meet code the model wr
 - **You need the model to see the value.** For qualitative reasoning on hidden data, use a different architecture: a self-hosted model, or a workflow where the model produces a plan and code that runs client-side against the real data.
 - **Your sensitive data is in free-form text tool responses.** Blindfold won't detect it without NER. Restructure your MCP server to emit structured JSON, or wait for the NER pass on the roadmap.
 - **You need the end user to read the real values, through a client you did not write.** Mode A cannot deliver them — see the by-design entry above. Use Mode B.
-- **You need protection against a model actively trying to extract the values.** The current sandbox does not provide it: exception text carries values out in one call, and success-versus-failure carries one bit per call regardless of any sandbox. Do not reach for the Docker sandbox as the answer — it closes network and filesystem, not either of those channels. Until the compute surface is narrowed, either don't enable blind compute on data whose exposure you cannot tolerate, or accept that your threat model assumes a cooperative model.
-- **You need the vault to survive restarts.** Add a storage adapter yourself, or wait for SQLite (roadmap) — and note that at the default one-hour TTL, persistence alone would not keep yesterday's conversation readable.
+- **You need protection against a model actively trying to extract values while arbitrary Python is enabled.** Keep the default `compute.mode: controlled`. `python_unsafe` remains a cooperative-model profile: exception messages are sanitized, but success-versus-failure still carries one bit per call and the sandbox is not an escape-proof isolation boundary.
+- **You need durable tokens but cannot protect a local database.** SQLite persistence ships, with optional AES-256-GCM value encryption. Without encryption the vault file contains the clear values; with it, key management becomes your responsibility.
 
 ---
 

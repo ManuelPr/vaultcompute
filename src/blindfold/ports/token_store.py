@@ -19,15 +19,14 @@ class TokenStore(ABC):
         are a contract between whoever mints and the rehydrator's regex, not a
         detail of where records happen to be kept.
 
-        8 bytes, not 4. The reason is collision, not guessing: `put` is an
-        upsert in both stores, so two records sharing a token means the second
-        silently replaces the first and a user is shown the wrong hidden value
-        under the right placeholder. At 32 bits that becomes likely around 65k
-        tokens — reachable in a persistent vault that accumulates. 64 bits puts
-        it out of reach, and eight more characters in a JSON string cost
-        nothing.
+        16 bytes, not 4. Tokens become bearer capabilities in host mode, where
+        possession is used to recover a session, so guessing matters as well
+        as collision. `put` is an upsert in both stores, so two records sharing
+        a token means the second silently replaces the first. 128 random bits
+        gives the security margin expected of a bearer credential while
+        remaining tiny in a JSON result.
         """
-        return f"⟦tok_{secrets.token_hex(8)}⟧"
+        return f"⟦tok_{secrets.token_hex(16)}⟧"
 
     @abstractmethod
     def put(self, record: VaultRecord) -> None: ...

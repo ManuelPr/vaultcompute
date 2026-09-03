@@ -1,4 +1,4 @@
-"""DetokenizePolicy port — authorization for reveal/compute."""
+"""DetokenizePolicy port — authorization for reveal and data operations."""
 
 from __future__ import annotations
 
@@ -19,3 +19,6 @@ class DetokenizePolicy(ABC):
 
     @abstractmethod
     def can_compute(self, context: DetokenizeContext, record: VaultRecord) -> bool: ...
+
+    @abstractmethod
+    def can_query(self, context: DetokenizeContext, record: VaultRecord) -> bool: ...

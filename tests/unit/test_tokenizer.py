@@ -12,7 +12,7 @@ from blindfold.core.tokenizer import (
 from blindfold.core.vault import MemoryTokenStore
 
 TTL = datetime.now(tz=timezone.utc) + timedelta(hours=1)
-TOKEN_RE = r"⟦tok_[0-9a-f]{16}⟧"
+TOKEN_RE = r"⟦tok_[0-9a-f]{32}⟧"
 
 
 def test_resolve_static_path():
@@ -177,7 +177,6 @@ def test_describe_schema_public_from_top_level_module():
         "$.employees[*].salary",
         "$.a[*].b[*].c",  # wildcards nest
         "$.items[0].name",  # integer index
-        "$",  # whole payload
         "$.a[*]",  # wildcard last
     ],
 )
@@ -195,6 +194,7 @@ def test_validate_path_accepts_supported_dialect(path):
         ("$.items['name']", "unsupported subscript"),
         ("$.items[*", "unbalanced"),
         ("$.a.", "ends with"),
+        ("$", "document root"),
         ("salary", "must start with '$'"),
     ],
 )

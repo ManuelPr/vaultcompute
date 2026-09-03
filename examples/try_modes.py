@@ -1,15 +1,19 @@
-"""Run each of the three modes against the fake HR server and show what happens.
+"""Run the original three flows against the fake HR server and show what happens.
 
 No API key, no Ollama, no Docker. The "model" is scripted, because the point is
 to watch what Blindfold does to the data, not whether an LLM gets the answer
 right.
 
-    uv run python examples/try_modes.py           # all three
+    uv run python examples/try_modes.py           # proxy, library, Claude hooks
     uv run python examples/try_modes.py a         # just one
 
 Mode C is run the way Claude Code runs it: the hooks are invoked as separate
 processes over a shared SQLite vault, which is the whole reason that mode needs
 one. Launching it inside a real Claude Code session is the last section.
+
+Mode D is not simulated here. Its defining behavior is Codex replacing a local
+tool result with post-hook feedback, which needs the real host to verify; the
+fixed event contract is covered under tests/unit/test_codex_hooks.py.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ from mcp.client.stdio import stdio_client
 
 from blindfold import PLACEHOLDER_PROMPT, rehydrate
 from blindfold.config import (
+    ComputeConfig,
     load_config,
     schema_fields_for,
     table_schemas_for,
@@ -159,6 +164,9 @@ async def mode_b(config_path: Path) -> None:
     )
 
     config = load_config(config_path)
+    # This scripted branch demonstrates legacy arbitrary-Python composition.
+    # It is an explicit opt-in; the shared config remains controlled for A/C.
+    config = config.model_copy(update={"compute": ComputeConfig(mode="python_unsafe")})
     store, policy, sandbox = MemoryTokenStore(), SessionBoundPolicy(), SubprocessSandbox()
     session_id = f"user_{uuid.uuid4().hex[:8]}"
     ttl = datetime.now(tz=timezone.utc) + timedelta(hours=1)
@@ -173,7 +181,7 @@ async def mode_b(config_path: Path) -> None:
             step("1", "Put PLACEHOLDER_PROMPT in your system prompt")
             show("first line", PLACEHOLDER_PROMPT.splitlines()[0])
 
-            step("2+3", "Describe protected tools, and advertise the compute tools")
+            step("2+3", "Explicitly opt into python_unsafe and advertise compute tools")
             listed = await session.list_tools()
             tools = []
             for t in listed.tools:
@@ -243,7 +251,7 @@ def hook(event: str, payload: dict, config_path: Path) -> dict | None:
 
 
 async def mode_c(workdir: Path) -> None:
-    head("MODE C — Claude Code plugin.  three hooks + an MCP server")
+    head("MODE C — Claude Code plugin.  four hooks + an MCP server")
     config_path = workdir / "blindfold_c.yaml"
     config_path.write_text(
         f"storage:\n  backend: sqlite\n  path: {workdir / 'vault.db'}\n{CONFIG}",

@@ -12,14 +12,15 @@ the columns that survived the query — so a query can be built up in steps.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
+from blindfold.core.capabilities import TableQueryCapability
 from blindfold.core.lineage import (
     Lineage,
+    Policy,
     TableSchema,
     VaultRecord,
-    compose_policy,
     compose_ttl,
 )
 from blindfold.core.table import COMPARISONS, ROW_OPS, TERMINAL_OPS, run_query
@@ -109,11 +110,17 @@ def handle_blindfold_table(
     policy: DetokenizePolicy,
     session_id: str,
     ttl_seconds: int,
+    capability: TableQueryCapability | None = None,
+    require_capability: bool = False,
 ) -> str:
     token = args.get("table")
     ops = args.get("ops")
     if not isinstance(token, str) or not isinstance(ops, list):
         raise ValueError("blindfold_table requires a string `table` and a list `ops`")
+    if require_capability and capability is None:
+        raise ValueError("this table query requires a trusted-side capability")
+    if capability is not None:
+        capability.authorize(session_id=session_id, table_token=token, ops=ops)
 
     record = store.get(token)
     if record is None:
@@ -123,7 +130,7 @@ def handle_blindfold_table(
             f"{token} is not a table token; use blindfold_compute for single values"
         )
     ctx = DetokenizeContext(session_id=session_id)
-    if not policy.can_compute(ctx, record):
+    if not policy.can_query(ctx, record):
         raise ValueError(f"policy denied query on token: {token}")
 
     rows = record.value if isinstance(record.value, list) else []
@@ -142,7 +149,14 @@ def handle_blindfold_table(
             created_at=now,
             ttl=compose_ttl([record]),
             lineage=Lineage(op="table_query", inputs=(token,)),
-            policy=compose_policy([record.policy]),
+            # A result of the constrained query language must not become an
+            # input to arbitrary Python. Otherwise a fresh count token per
+            # threshold bypasses the per-token oracle rate limit.
+            policy=Policy(
+                reveal_to_frontend=record.policy.reveal_to_frontend,
+                can_be_input_to_compute=False,
+                can_be_input_to_query=record.policy.can_be_input_to_query,
+            ),
             table=_surviving_schema(record.table, ops, value),
         )
     )

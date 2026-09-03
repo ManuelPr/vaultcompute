@@ -1,10 +1,17 @@
 # Blindfold
 
-> A privacy proxy for LLM tool calls. Your private APIs' data never enters the model's context — the LLM reasons over anonymous tokens, computes blindly on data it cannot see, and real values are restored only at the last hop, after an authorization check.
+> A privacy layer for structured LLM tool results. On supported, declared paths Blindfold replaces private values with opaque tokens before the model receives them, and restores authorized values only at a caller-controlled last hop.
 
 *(Working name — subject to change.)*
 
 **Status:** pre-alpha. The MVP is built and covered by tests; everything beyond it is design, not code.
+
+| Surface | Status | Intended guarantee |
+|---|---|---|
+| Core + Mode B library | reference | the application owns both ingress and final egress |
+| Mode A MCP proxy | beta | strict protection of declared JSON results; no automatic final rehydration |
+| Mode C Claude Code | experimental | fail-closed adapter for explicitly supported host result shapes |
+| Mode D Codex | experimental guardrail | supported local hook paths only; placeholders remain visible |
 
 This README describes both, so it marks which is which:
 
@@ -29,9 +36,9 @@ Blindfold sits between your agent harness and your APIs (or MCP servers). It:
 
 1. **Tokenizes tool results.** Sensitive fields — declared per-tool in a schema — are replaced with typed anonymous tokens before the result reaches the LLM. The real values stay in a local vault — in memory by default, or in a SQLite file when the vault has to survive a restart or be shared between processes. That file holds cleartext unless you set `encrypt_at_rest` and supply a key from outside it.
 2. **Tells the LLM what the tokens mean, not what they are.** Each protected tool's description gains one line per declared path — `$.salary — salary, EUR/year` — so the model knows what it is manipulating even when the upstream API names its fields `f_42`. Sent once, with the tool definitions; never per token, never the value.
-3. **Enables blind compute.** The LLM can operate on tokens without reading them: `blindfold_compute` runs code it submits in a sandbox on the real values, and `blindfold_table` applies a fixed set of operations to a whole hidden list. Either way the result is stored as a *new* token with full lineage, and the model orchestrates computations on data it never sees.
+3. **Enables controlled operations.** The default `controlled` profile exposes `blindfold_table`, a fixed operation set over a hidden list. Arbitrary model-written Python is available only through the explicit `python_unsafe` profile; its sandbox and rate limit do not make it safe against a malicious or prompt-injected model.
 4. **Rehydrates at the last hop.** Tokens in the model's answer are replaced with real values only when the response is delivered to the end user — after a pluggable authorization check. **This step is yours to call.** It happens in your application code, on the answer the model produced; a third-party MCP client will not do it for you (see [Quick start](#quick-start) and [`LIMITATIONS.md`](LIMITATIONS.md#rehydration-requires-a-client-you-control)).
-5. **Lets you check it actually worked.** `blindfold audit <transcript>` cross-references the vault against a real conversation and reports any hidden value that made it through — the one way to tell a working install from no install at all, since the screen looks identical either way once rehydration puts the real values back.
+5. **Provides a diagnostic audit.** `blindfold audit <transcript>` cross-references exact vault values against a conversation. It can confirm expected placeholders and catch direct cleartext matches; it is not proof of non-disclosure because undeclared, transformed, inferred and very short values can evade it.
 
 ```
 ┌────────────┐   answer with real values    ┌─────────────────────┐
@@ -87,7 +94,7 @@ Every vault entry is a full record, not a bare key-value pair:
 
 The lineage DAG buys three things most redaction tools don't have:
 
-- **Audit** — every derived value can show exactly which inputs and which code produced it. `blindfold audit <transcript>` cross-references the vault against a real conversation transcript and reports any hidden value that made it through — the way to check the protection actually held, since a working install and no install look identical on screen.
+- **Audit** — every derived value can show which inputs and code produced it. `blindfold audit <transcript>` is a diagnostic for placeholders and exact cleartext matches; it is not a proof of non-disclosure.
 - **Cascading invalidation** — expire or delete a token and all its descendants go with it. Implemented as `invalidate_cascade`, but nothing in the runtime calls it yet: today it is an API for your code, not an automatic behavior.
 - **Policy inheritance** — a derived token inherits the *most restrictive* policy of its inputs, so sensitive data can't be laundered through a computation. This one is wired: `compose_policy` and `compose_ttl` run on every blind compute.
 
@@ -100,10 +107,10 @@ employees x 5 sensitive fields:
 ```
 individual tokens : 2500
 collective token  : 1
-the model sees    : {"employees": "⟦tok_a58cbaf0⟧"}
+the model sees    : {"employees": "⟦tok_a58cbaf08d2f45058ba8493ca72e94cb⟧"}
 ```
 
-The cost of not having this was never context size — tokens are 22 characters
+The cost of not having this was never context size — current tokens are 38 characters
 and *replace* the values they hide, measured at +3% on that same response back
 when they were 14. It
 was that the model could not operate on the result at all: a few hundred
@@ -116,7 +123,7 @@ rather than code — `filter`, `sort_by`, `limit`, `select`, `sum`, `mean`,
 
 ```
 model  -> filter dept == Eng, sort by salary desc, limit 3, select name, salary
-result -> ⟦tok_dc708f10⟧
+result -> ⟦tok_dc708f103c704e9ba8af451b542c1762⟧
 user   -> [{"name": "p499", "salary": 48463}, …]
 ```
 
@@ -124,6 +131,13 @@ That restriction is the feature, not a compromise. Arbitrary Python lets a
 model write something whose *success* depends on a hidden value and read one
 bit per call; a fixed operation set cannot express it. So this path executes no
 model-written code and **needs no sandbox at all**.
+
+Table tokens and every value derived from them are policy-marked as ineligible
+for `blindfold_compute`. This prevents a model from creating a fresh count token
+for each threshold and feeding those tokens to Python as a success/failure
+oracle. A Mode B application can additionally require a trusted-side
+`TableQueryCapability` that binds one exact table, session, operation list and
+expiry to the user's authorized request.
 
 ### Schema-driven tokenization
 
@@ -146,11 +160,11 @@ The declared `semantic_type` and `unit` are what the model is told about each pa
 
 ### Robust rehydration
 
-Tokens use collision-proof delimiters (`⟦tok_…⟧`). `rehydrate()` validates every token in the model's answer against the vault: a token that doesn't resolve renders as `[unknown token]` (hallucinated or expired), one the policy refuses renders as `[redacted]`. Neither is silently dropped.
+Tokens use distinctive delimiters and 128 random bits (`⟦tok_…⟧`). `rehydrate()` validates every token in the model's answer against the vault: a token that doesn't resolve renders as `[unknown token]` (hallucinated or expired), one the policy refuses renders as `[redacted]`. Neither is silently dropped.
 
 Rehydration is a function your application calls on the final answer, not something that happens on the wire. Two consequences worth knowing before you design around it:
 
-- The model has to preserve the placeholders verbatim for this to work. `from blindfold import PLACEHOLDER_PROMPT` and put it in your system prompt — both demos do exactly that, and Mode C carries the same text inside its `SessionStart` briefing, so all three modes draw from one source rather than three drifting paraphrases.
+- The model has to preserve the placeholders verbatim for this to work. `from blindfold import PLACEHOLDER_PROMPT` and put it in your system prompt — both demos do exactly that, while the Claude Code and Codex plugins carry the same text inside their `SessionStart` briefing.
 - If the model's answer never passes through your code, nothing rehydrates it. That is the situation with any MCP client you did not write — see [`LIMITATIONS.md`](LIMITATIONS.md#rehydration-requires-a-client-you-control).
 
 ## Quick start
@@ -162,7 +176,7 @@ git clone https://github.com/ManuelPr/blindfold && cd blindfold
 uv sync            # or:  pip install -e .
 ```
 
-There are three ways to use it. **Inside Claude Code, pick Mode C. Everywhere else, pick Mode B unless you know why you want Mode A.**
+There are four ways to use it. **Inside Claude Code, pick Mode C. Inside Codex, Mode D protects supported local tool results but leaves placeholders visible. Everywhere else, pick Mode B unless you know why you want Mode A.**
 
 **Mode A — a CLI wrapping another stdio MCP server:**
 
@@ -171,7 +185,13 @@ There are three ways to use it. **Inside Claude Code, pick Mode C. Everywhere el
 blindfold --config blindfold.yaml -- python -m your_org.some_mcp_server
 ```
 
-This protects the LLM provider from ever seeing the values, and needs no application code. But it stops there: the proxy sits on the tool channel, below the client, so the model's *answer* never passes through it. With a client you did not write — Claude Desktop, Cursor, Zed — the end user reads `The higher earner is ⟦tok_9c1bf051⟧` and nothing turns that back into a name. This is structural, not a missing feature: see [`LIMITATIONS.md`](LIMITATIONS.md#rehydration-requires-a-client-you-control). Mode A is the right choice when hiding the values from the provider is the whole goal and placeholders in the output are acceptable, or when the MCP client is yours and can call `blindfold/rehydrate`.
+In its default strict profile this protects declared fields in supported JSON
+tool/resource results and blocks protocol shapes it cannot inspect: batches,
+non-JSON text, blobs, images, and declared paths that no longer match. Setting
+`proxy.strict: false` restores compatibility passthrough and explicitly gives
+up the complete-boundary claim. Mode A still cannot own the model's final
+answer: with a client you did not write, the user sees placeholders. See
+[`LIMITATIONS.md`](LIMITATIONS.md#rehydration-requires-a-client-you-control).
 
 **Mode C — a Claude Code plugin:**
 
@@ -179,14 +199,15 @@ This protects the LLM provider from ever seeing the values, and needs no applica
 claude --plugin-dir ./plugin        # from a clone; see plugin/README.md
 ```
 
-Three hooks and one small MCP server, because a host gives Blindfold different
+Four hooks and one small MCP server, because a host gives Blindfold different
 seams than a protocol does:
 
 | Piece | Does what |
 |---|---|
 | `SessionStart` hook → `additionalContext` | tells the model, once before the first prompt, which paths come back as placeholders and what they mean — and to reproduce them verbatim |
-| `PostToolUse` hook → `updatedToolOutput` | rewrites the tool result **the model receives** — tokenization, for *every* tool, not only MCP servers: `Bash`, `Read` and `WebFetch` included |
-| `mcp-server` (`blindfold mcp-server`) | offers `blindfold_compute` as an ordinary tool, so the model can operate on what it cannot read |
+| `PreToolUse` hook | refuses a configured built-in before execution when Blindfold has no tested adapter for its result shape |
+| `PostToolUse` hook → `updatedToolOutput` | rewrites the result **the model receives**, preserving the shape expected by Claude Code; audited today for one-part JSON MCP results and JSON in `Bash`/`PowerShell` standard output |
+| `mcp-server` (`blindfold mcp-server`) | offers the operations selected by `compute.mode`; arbitrary Python is absent by default |
 | `MessageDisplay` hook → `displayContent` | rewrites **what the screen shows**, leaving the transcript untouched — rehydration |
 
 The last one solves the problem Mode A cannot. Because `MessageDisplay` is
@@ -204,6 +225,30 @@ separate process, so the vault has to be shared. The CLI refuses to run the
 hooks with a memory vault rather than minting tokens nobody will be able to
 resolve.
 
+Configured tools are fail-closed at the host boundary. A built-in such as
+`Read` or `WebFetch`, whose output has no audited adapter yet, is denied before
+it runs. If an admitted result is not structured JSON or its declared paths no
+longer match, the turn stops before another model request can receive the
+original. Undeclared tools remain untouched.
+
+**Mode D — a Codex plugin:**
+
+```bash
+# plugin source: ./plugins/blindfold-codex
+```
+
+Codex can run a hook after supported local tools and replace their result with
+Blindfold's tokenized JSON. This covers shell commands, local execution, file
+patches, MCP tools, and most local function tools. It does not cover hosted
+tools such as web search, and some specialized paths may opt out.
+
+There is one deliberate difference from Claude Code: Codex currently exposes
+no display-only hook that can put real values on screen without also returning
+them to the conversation. Therefore the model and the user both see
+`⟦tok_…⟧`. The protection is useful when opaque output is acceptable; it is not
+feature parity with Mode C. See [`plugins/blindfold-codex/`](plugins/blindfold-codex/)
+and the exact host matrix in [`docs/host-adapters.md`](docs/host-adapters.md).
+
 **Mode B — an in-process library (used by a harness you write):**
 
 ```python
@@ -217,9 +262,41 @@ policy = SessionBoundPolicy()
 final_text = rehydrate(llm_answer, session_id, store, policy)
 ```
 
-Mode B is the one where the loop actually closes: your code owns the final answer, so it can rehydrate it. It works with any LLM SDK and needs no MCP.
+Mode B is the reference integration: your code owns the tool result, the
+authorization decision and the final answer, so the loop actually closes. It
+works with any LLM SDK and needs no MCP.
 
-Out of the box, nothing needs configuring: memory vault, session-bound authorization, subprocess sandbox. Configuration is something you discover when you need it, not a prerequisite. See [`examples/demo_chat.py`](examples/demo_chat.py) for an Anthropic SDK loop end-to-end.
+For user-intent authorization, issue a capability on the trusted side and
+require an exact match when executing the model's proposed query:
+
+```python
+from datetime import datetime, timedelta, timezone
+from blindfold import TableQueryCapability
+from blindfold.tools.blindfold_table import handle_blindfold_table
+
+ops = [{"op": "filter", "column": "salary", "cmp": ">", "value": 70000}]
+capability = TableQueryCapability.issue(
+    session_id=session_id,
+    table_token=table_token,
+    ops=ops,
+    expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+)
+result_token = handle_blindfold_table(
+    {"table": table_token, "ops": agent_ops},
+    store=store, policy=policy, session_id=session_id, ttl_seconds=3600,
+    capability=capability, require_capability=True,
+)
+```
+
+The application—not a PII classifier or an LLM judge—decides when to issue the
+capability. Changing `70000`, the table, the operation or the session is refused.
+
+Out of the box the security-relevant defaults are a memory vault,
+session-bound authorization, controlled table operations, and strict proxy
+handling. The subprocess Python sandbox is constructed only by integrations
+that explicitly enable or call the `python_unsafe` surface. See
+[`examples/demo_chat.py`](examples/demo_chat.py) for a deliberately unsafe
+Anthropic SDK compute example.
 
 One thing Mode A does for you that Mode B does not: appending the protected-path descriptions to your tool definitions. Call `describe_schema(fields)` yourself and append the result to the tool's description, or the model will be handed placeholders with no idea what they stand for.
 
@@ -237,8 +314,12 @@ storage:
   encrypt_at_rest: false    # sqlite only; needs BLINDFOLD_VAULT_KEY
 
 compute:
+  mode: controlled           # disabled | controlled | python_unsafe
   max_calls_per_token: 8    # blindfold_compute calls on one token per window; 0 disables
   rate_window_s: 60         # window length in seconds
+
+proxy:
+  strict: true              # false permits uninspected compatibility passthrough
 
 schemas:
   hr_api.get_salary:
@@ -282,11 +363,14 @@ Only the value is sealed; token, session and timestamps stay readable because
 the store queries on them. Holding the file still reveals how many records
 exist and when.
 
-`default_ttl` deserves a thought before you deploy: it governs how long a conversation containing placeholders stays readable. At the default of one hour, an answer the user comes back to tomorrow rehydrates as `[unknown token]` — the placeholders in your chat history outlive the vault entries they point at. Raise it if that matters to you; the vault is in memory, so a restart ends the session either way.
+`default_ttl` deserves a thought before you deploy: it governs how long a conversation containing placeholders stays readable. At the default of one hour, an answer the user comes back to tomorrow rehydrates as `[unknown token]`. A memory vault also loses live records on restart; SQLite preserves them until their TTL.
 
 ### The rest of the file **[planned]**
 
-The keys below are the designed shape of the configuration. They are **not implemented**: `load_config` tolerates them (`extra="allow"`) and ignores them. Nothing here changes Blindfold's behavior today.
+The block below is a design sketch, **not valid current configuration**.
+Unknown top-level sections are retained for forward compatibility, but typos or
+unimplemented keys inside a section Blindfold already understands are rejected
+rather than silently ignored. Nothing below changes runtime behavior today.
 
 ```yaml
 mode: local                 # local | server
@@ -309,7 +393,7 @@ compute:
   network: false
 ```
 
-Where today's behavior differs from what those keys suggest: every token is minted fresh (no `stable` consistency), the policy is always `session_bound`, the sandbox is always the subprocess one with a hard-coded 5-second timeout, and `network: false` describes an intent rather than an enforced setting — see [Threat model](#threat-model--limitations).
+Where today's behavior differs from what those planned keys suggest: every token is minted fresh (no `stable` consistency), the policy is always `session_bound`, and `network: false` is not an enforced sandbox boundary. The subprocess sandbox exists only for the explicit `python_unsafe` surface and still has a hard-coded five-second timeout — see [Threat model](#threat-model--limitations).
 
 Two built-in profiles are designed to cover the common cases — **`local`** (single user, memory/SQLite vault, stdio MCP transport) and **`server`** (multi-user, Redis vault, webhook authorization, HTTP transport). **[planned]**: only the `local` shape exists, now with either vault.
 
@@ -320,16 +404,16 @@ The core is deliberately small: intercept → tokenize → track lineage → bli
 | Port | Contract | Ships today | Designed **[planned]** |
 |---|---|---|---|
 | `TokenStore` | `mint_token`, `put`, `get`, `resolve`, `find_by_session`, `invalidate_cascade`, `purge_expired` | `memory` *(default)*, `sqlite` | `redis`, `postgres` |
-| `DetokenizePolicy` | `can_reveal(context, token_record) → bool` | `session_bound` *(default)* | `allow_all`, `claims`, `webhook` |
+| `DetokenizePolicy` | `can_reveal` / `can_compute` / `can_query` | `session_bound` *(default)* | `allow_all`, `claims`, `webhook` |
 | `ComputeSandbox` | `run(code, resolved_inputs) → value` | `subprocess` | `docker` |
 
 The ports exist so the rest is additive rather than a rewrite. The two `TokenStore` implementations are held to one behavioural suite that uses the public interface only, so swapping them changes nothing else.
 
 Notes for adapter authors:
 
-- **TTL lives in the core**, so no storage adapter can forget it: expiry is checked on every `get`. At-rest encryption is designed to live there too, but there is no at-rest anything yet.
+- **TTL lives in the core**, so no storage adapter can forget it: expiry is checked on every `get`. SQLite values can be sealed with AES-256-GCM using a key supplied outside the database.
 - Detokenization is an **authorization point**, not a string substitution. `SessionBoundPolicy` refuses any token minted in another session, so a guessed ID resolves to `[redacted]` rather than a value. Per-user separation on top of that arrives with multi-user deployment **[planned]**.
-- The same policy hook gates blind compute (`can_compute`), since *computing on* data is sometimes as sensitive as *seeing* it. This one is wired today.
+- Separate policy hooks gate arbitrary compute (`can_compute`) and constrained table queries (`can_query`), since permission to use a fixed query language must not imply permission to resolve the same value inside Python.
 
 ## Deployment
 
@@ -347,8 +431,8 @@ Read this before deploying. Honesty here is a feature.
 
 - **Access control between your users and your APIs.** Blindfold forwards the caller's identity headers untouched and lets *your* APIs enforce their own ACLs. If your API answers salary queries to anyone holding a service token, Blindfold will faithfully tokenize data the caller should never have obtained. Enforcement belongs upstream; we just don't break it.
 - **Prompt-side leakage.** The user's question still goes to the provider. *"What is Andrea Tuscano's salary?"* reveals a name and an intent even if the answer is tokenized. Optional inbound prompt tokenization (NER-based) is planned, at a cost in answer quality.
-- **Inference leakage by design decisions you make.** With `consistency: stable`, the model can reason about equality ("this token appears twice → same entity") — that equality relation *is* information disclosed to the provider. It's configurable per semantic type precisely because it's a real trade-off; choose deliberately.
-- **A malicious or prompt-injected model writing exfiltrating compute code.** This is the weakest part of the current release, and the description below is what was actually observed, not what was intended.
+- **Inference leakage from planned stable tokens.** If the planned `consistency: stable` option is implemented, equality between occurrences will become visible to the provider. The current implementation always mints fresh tokens and does not read this planned key.
+- **A malicious or prompt-injected model when `compute.mode: python_unsafe` is enabled.** This optional profile deliberately assumes a cooperative model.
 
   What holds: results leave the sandbox only as new vault tokens, derived tokens inherit their inputs' policies and shortest TTL, `resolve()` refuses any token not declared in `inputs`, and the error channel carries exception *types* only — never messages, never child output.
 
@@ -398,30 +482,38 @@ Ordered by what the current release most needs, not by ambition.
 - [x] **Expiry frees memory** — the vault sweeps expired records instead of holding cleartext values for the life of the process
 - [x] **SQLite store** — a vault that survives a restart and can be shared between processes
 - [x] **Claude Code hooks** — tokenization and reveal without a proxy, and without placeholders reaching the user
-- [x] **Mode C completed** — session briefing so the model knows what the placeholders are, and an MCP server so it can compute on them
-- [x] **Collective (table) tokens** — one placeholder per list, queried by a fixed operation set; also the answer to the one-bit oracle
+- [x] **Mode C implemented experimentally** — session briefing, strict supported-result adapters, shared operation server and display-only reveal
+- [x] **Host-specific adapters and fail-closed contracts** — Claude Code preserves each admitted result shape; configured unsupported built-ins are denied before execution
+- [x] **Codex plugin** — protected local tool results are replaced before the model continues; placeholders remain visible because Codex has no display-only reveal hook
+- [x] **Opt-in Claude Code compatibility check** — one real tool call, pinned to an exact installed version, audited against the persisted transcript
+- [x] **Collective (table) tokens** — one placeholder per list, queried by a fixed operation set and prohibited as arbitrary-Python inputs
+- [x] **Safe compute profiles** — controlled table operations by default; arbitrary Python only through explicit `python_unsafe` opt-in
+- [x] **Trusted-side table capabilities** — an application can authorize one exact session/table/query/expiry without an LLM judge
+- [x] **Strict Mode A boundary** — unsupported batches/content and protected shape drift are blocked by default, with permissive passthrough explicitly downgraded
+- [x] **128-bit capability tokens and mandatory host sessions** — no shared `unknown` session fallback
 - [x] **Encryption at rest** — AES-256-GCM, key from the environment, never from the config file
 - [x] **CI on Linux, macOS and Windows** — including the sandbox probes, so the documented behaviour is asserted per platform
 - [x] **Restricted builtins in the compute child** — the easy filesystem and network paths are gone without anyone installing Docker; not a boundary, a higher cost
 - [x] **Export the placeholder-preserving prompt fragment** as `PLACEHOLDER_PROMPT`, used by both demos and by the Mode C briefing
-- [x] **`blindfold audit`** — cross-references a real conversation transcript against the vault and reports any hidden value that made it through; the check for "is this actually working," since a working install and no install look identical on screen
+- [x] **`blindfold audit` diagnostic** — cross-references a transcript against the vault for placeholders and exact cleartext matches; useful evidence, not proof of non-disclosure
 - [x] **Rate-limited `blindfold_compute`** — `compute.max_calls_per_token`/`rate_window_s` bound how fast the one-bit oracle above can be probed on a single token, without capping legitimate reuse spread across a session
 - [ ] Table joins, group-by and cross-table aggregation — the operations collective tokens do not have yet
 - [ ] Docker sandbox — the OS-level answer to network and filesystem, after the cheap in-process measures
 - [ ] HTTP proxy mode for plain REST APIs
 - [ ] Redis + Postgres adapters, webhook policy, audit log exporter
 - [ ] Optional inbound prompt tokenization (NER)
-- [ ] CaMeL-style capability tracking in the compute sandbox
+- [ ] Richer CaMeL-style capability propagation beyond exact Mode B table queries
 
 ## Documentation
 
 ### Current — kept in step with the code
 
-- **[`docs/modes.md`](docs/modes.md)** — which of the three integration modes you want, what each one can and cannot do, and the one question that decides it. Read this before installing anything.
+- **[`docs/modes.md`](docs/modes.md)** — which of the four integration modes you want, what each one can and cannot do, and the one question that decides it. Read this before installing anything.
+- **[`docs/host-adapters.md`](docs/host-adapters.md)** — exact Claude Code and Codex coverage, failure behavior, compatibility testing, and the evidence required before building a custom client.
 - **[`docs/architecture.md`](docs/architecture.md)** — how the code actually works. Component-by-component tour with a full end-to-end frame-by-frame example. Start here after this README.
 - **[`LIMITATIONS.md`](LIMITATIONS.md)** — what Blindfold does *not* do, split into by-design (permanent) and MVP (temporary), with a cost estimate on every closable gap. Read before deploying against real data.
 - **[`blindfold.example.yaml`](blindfold.example.yaml)** — a copy-paste-ready configuration example, containing exactly the keys the current release reads.
-- **[`examples/try_modes.py`](examples/try_modes.py)** — runs all three modes against the fake HR server with no API key. The fastest way to see what each one does.
+- **[`examples/try_modes.py`](examples/try_modes.py)** — runs the proxy, library, and Claude Code flows against the fake HR server with no API key. Codex needs its real hook host, so its contract is covered by the test suite instead of this scripted demo.
 - **[`examples/demo_chat.py`](examples/demo_chat.py)** — a runnable Anthropic + Blindfold + fake HR MCP loop.
 
 ### Project history — frozen, not maintained

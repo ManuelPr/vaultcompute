@@ -23,6 +23,7 @@ class Lineage:
 class Policy:
     reveal_to_frontend: bool = True
     can_be_input_to_compute: bool = True
+    can_be_input_to_query: bool = True
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,7 @@ def compose_policy(inputs: list[Policy]) -> Policy:
     return Policy(
         reveal_to_frontend=all(p.reveal_to_frontend for p in inputs),
         can_be_input_to_compute=all(p.can_be_input_to_compute for p in inputs),
+        can_be_input_to_query=all(p.can_be_input_to_query for p in inputs),
     )
 
 
