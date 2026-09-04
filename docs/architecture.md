@@ -99,6 +99,11 @@ Four integration points in your loop:
 3. **Authorize and route controlled queries.** Translate the user's authorized request into an exact, short-lived `TableQueryCapability`, then call `session.execute_authorized_query(..., capability=capability)`. A changed table, operation, literal or session is rejected.
 4. **Rehydrate before display.** Call `session.render_final_answer(final_text)` only at the user-visible boundary.
 
+Synchronous tools use `call_protected_tool`; asynchronous SDK/tool calls use
+`await call_protected_tool_async`. Both return only the protected result. A
+framework that already performed the call can hand its decoded result directly
+to `protect_tool_result`.
+
 The façade refuses unknown tools, absent required paths and declared tables of
 the wrong shape before it writes anything to the vault. A path that is truly
 optional must say `required: false` in configuration. Low-level primitives

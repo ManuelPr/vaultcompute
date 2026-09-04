@@ -258,6 +258,7 @@ from blindfold.config import load_config
 session = BlindfoldSession(load_config("blindfold.yaml"), session_id=session_id)
 system_prompt += "\n\n" + session.model_instructions
 protected = session.call_protected_tool("get_salary", get_salary, employee_id)
+# Async tools use: await session.call_protected_tool_async(...)
 # Send only `protected` to the model.
 visible_answer = session.render_final_answer(llm_answer)
 ```
@@ -301,6 +302,15 @@ Anthropic SDK compute example.
 briefing. Integrations that need per-tool descriptions can still use
 `describe_schema()` and `describe_tables()`. The lower-level tokenizer,
 rehydrator and handlers remain available for advanced integrations.
+
+The recommended Mode B API is intentionally small:
+
+- `model_instructions` — safe system context for placeholders and schemas;
+- `call_protected_tool()` / `call_protected_tool_async()` — invoke a tool and
+  return only its protected result;
+- `protect_tool_result()` — protect a result already obtained by a framework;
+- `execute_authorized_query()` — run an exact capability-bound table query;
+- `render_final_answer()` — reveal placeholders only at the user boundary.
 
 ## Configuration
 
@@ -499,6 +509,7 @@ Ordered by what the current release most needs, not by ambition.
 - [x] **Export the placeholder-preserving prompt fragment** as `PLACEHOLDER_PROMPT`, used by both demos and by the Mode C briefing
 - [x] **`blindfold audit` diagnostic** — cross-references a transcript against the vault for placeholders and exact cleartext matches; useful evidence, not proof of non-disclosure
 - [x] **Lineage-wide compute attempt quota** — atomic across threads and SQLite processes; successes, failures and timeouts share the original secrets' budget, derived tokens cannot reset it, and blocked bursts appear in `blindfold audit`
+- [x] **Fail-closed Mode B façade** — one session owns sync/async tool protection, policy, TTL, authorized table queries, model instructions and final rendering
 - [ ] Table joins, group-by and cross-table aggregation — the operations collective tokens do not have yet
 - [ ] Docker sandbox — the OS-level answer to network and filesystem, after the cheap in-process measures
 - [ ] HTTP proxy mode for plain REST APIs

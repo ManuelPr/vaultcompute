@@ -147,6 +147,7 @@ The safe path:
    placeholder rules and every configured protected path.
 2. **Protect every tool result.** Prefer
    `session.call_protected_tool(tool_name, function, *args)` for synchronous
+   tools and `await session.call_protected_tool_async(...)` for asynchronous
    tools, so the caller receives only the protected copy. When a framework has
    already invoked the tool, use `session.protect_tool_result(tool_name,
    result)` immediately.
@@ -177,13 +178,14 @@ against the Anthropic SDK.
   seam.
 - Freedom over session identity: use your real user id, and `SessionBoundPolicy`
   will refuse another user's placeholders.
+- Fail-fast configuration: non-positive token TTLs are rejected at startup.
 
 **What you do not get**
 
 - Control over an LLM SDK you call outside the façade: the application must
   still send the protected result, not a raw result it obtained elsewhere.
-- Automatic async tool invocation. Protect an awaited result immediately with
-  `protect_tool_result()`.
+- Automatic orchestration of a provider-specific chat loop. The façade owns
+  privacy boundaries; your application still owns messages and tool dispatch.
 
 The primitive tokenizer, rehydrator and handlers remain available as an
 advanced API for integrations that need custom orchestration.

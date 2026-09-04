@@ -123,7 +123,7 @@ class ToolSchemaConfig(StrictConfigModel):
 
 
 class TokensConfig(StrictConfigModel):
-    default_ttl: int = 3600
+    default_ttl: int = Field(default=3600, gt=0)
 
 
 class ComputeConfig(StrictConfigModel):

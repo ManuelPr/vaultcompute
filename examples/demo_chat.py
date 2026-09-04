@@ -14,23 +14,18 @@ import json
 import os
 import sys
 import uuid
-from datetime import datetime, timedelta, timezone
 
 from anthropic import Anthropic
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from blindfold import PLACEHOLDER_PROMPT, rehydrate
+from blindfold import BlindfoldSession
 from blindfold.config import (
     BlindfoldConfig,
     ComputeConfig,
     SensitiveFieldConfig,
     ToolSchemaConfig,
-    schema_fields_for,
 )
-from blindfold.core.policy import SessionBoundPolicy
-from blindfold.core.tokenizer import describe_schema, tokenize_result
-from blindfold.core.vault import MemoryTokenStore
 from blindfold.sandbox.subprocess_ import SubprocessSandbox
 from blindfold.tools.blindfold_compute import (
     BLINDFOLD_COMPUTE_TOOL_NAME,
@@ -39,15 +34,9 @@ from blindfold.tools.blindfold_compute import (
 )
 
 MODEL = "claude-opus-4-7"
-# Ships with the package, so an integration does not have to know to copy it
-# out of an example. Rehydration only works on placeholders the model
-# reproduced exactly, and nothing else enforces that.
-SYSTEM_PROMPT = PLACEHOLDER_PROMPT
 
 
 async def _amain(question: str) -> None:
-    store = MemoryTokenStore()
-    policy = SessionBoundPolicy()
     sandbox = SubprocessSandbox()
     session_id = f"demo_{uuid.uuid4().hex[:8]}"
     config = BlindfoldConfig(
@@ -62,7 +51,7 @@ async def _amain(question: str) -> None:
         # should prefer a declared table plus TableQueryCapability.
         compute=ComputeConfig(mode="python_unsafe"),
     )
-    ttl = datetime.now(tz=timezone.utc) + timedelta(hours=1)
+    blindfold = BlindfoldSession(config, session_id=session_id)
 
     server_params = StdioServerParameters(
         command=sys.executable,
@@ -71,21 +60,18 @@ async def _amain(question: str) -> None:
     )
 
     async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            listed = await session.list_tools()
-            # Integration point 1a: tell the model what each protected tool's
-            # placeholders mean. Mode A does this for you by rewriting the
-            # tools/list response; in-process, it is this append.
-            tools = []
-            for t in listed.tools:
-                description = t.description or ""
-                note = describe_schema(schema_fields_for(config, t.name))
-                if note is not None:
-                    description = f"{description.rstrip()}\n\n{note}".lstrip()
-                tools.append(
-                    {"name": t.name, "description": description, "input_schema": t.inputSchema}
-                )
+        async with ClientSession(read, write) as mcp_session:
+            await mcp_session.initialize()
+            listed = await mcp_session.list_tools()
+            tools = [
+                {
+                    "name": tool.name,
+                    "description": tool.description or "",
+                    "input_schema": tool.inputSchema,
+                }
+                for tool in listed.tools
+                if tool.name in config.schemas
+            ]
             tool_def = build_tool_definition()
             tools.append({
                 "name": BLINDFOLD_COMPUTE_TOOL_NAME,
@@ -100,7 +86,7 @@ async def _amain(question: str) -> None:
                 response = client.messages.create(
                     model=MODEL,
                     max_tokens=1024,
-                    system=SYSTEM_PROMPT,
+                    system=blindfold.model_instructions,
                     tools=tools,
                     messages=messages,
                 )
@@ -117,11 +103,11 @@ async def _amain(question: str) -> None:
                         try:
                             token = handle_blindfold_compute(
                                 block.input,
-                                store=store,
-                                policy=policy,
+                                store=blindfold.store,
+                                policy=blindfold.policy,
                                 sandbox=sandbox,
-                                session_id=session_id,
-                                ttl_seconds=3600,
+                                session_id=blindfold.session_id,
+                                ttl_seconds=config.tokens.default_ttl,
                             )
                             tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": token})
                         except Exception as exc:
@@ -131,19 +117,21 @@ async def _amain(question: str) -> None:
                             })
                         continue
 
-                    call = await session.call_tool(block.name, block.input)
-                    text = call.content[0].text if call.content else "{}"
-                    fields = schema_fields_for(config, block.name)
-                    if fields:
-                        payload = json.loads(text)
-                        tokenized = tokenize_result(payload, block.name, fields, store, session_id, ttl)
-                        text = json.dumps(tokenized)
+                    async def invoke_tool():
+                        call = await mcp_session.call_tool(block.name, block.input)
+                        text = call.content[0].text if call.content else "{}"
+                        return json.loads(text)
+
+                    protected = await blindfold.call_protected_tool_async(
+                        block.name, invoke_tool
+                    )
+                    text = json.dumps(protected, ensure_ascii=False)
                     tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": text})
 
                 messages.append({"role": "user", "content": tool_results})
 
             final_text = "".join(b.text for b in response.content if b.type == "text")
-            print(rehydrate(final_text, session_id, store, policy))
+            print(blindfold.render_final_answer(final_text))
 
 
 def main() -> None:

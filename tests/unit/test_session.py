@@ -82,6 +82,20 @@ def test_call_protected_tool_returns_only_the_protected_result():
     assert protected["salary"] != 71000
 
 
+async def test_call_protected_tool_async_returns_only_the_protected_result():
+    session = BlindfoldSession(_config(), session_id="s")
+
+    async def get_employee(employee_id):
+        return {"id": employee_id, "salary": 71000}
+
+    protected = await session.call_protected_tool_async(
+        "get_employee", get_employee, 4
+    )
+
+    assert protected["id"] == 4
+    assert protected["salary"] != 71000
+
+
 def test_authorized_query_requires_and_enforces_exact_capability():
     session = BlindfoldSession(_config(), session_id="s")
     protected = session.protect_tool_result(

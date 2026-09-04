@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -79,6 +79,17 @@ class BlindfoldSession:
     ) -> Any:
         """Invoke a synchronous tool and expose only its protected result."""
         return self.protect_tool_result(tool_name, invoke(*args, **kwargs))
+
+    async def call_protected_tool_async(
+        self,
+        tool_name: str,
+        invoke: Callable[..., Awaitable[Any]],
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Invoke an asynchronous tool and expose only its protected result."""
+        return self.protect_tool_result(tool_name, await invoke(*args, **kwargs))
 
     def execute_authorized_query(
         self,

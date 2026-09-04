@@ -448,3 +448,9 @@ def test_protected_paths_are_required_by_default_but_can_be_optional():
     assert schema.sensitive_fields[0].required is True
     assert schema.sensitive_fields[1].required is False
     assert schema.tables[0].required is False
+
+
+@pytest.mark.parametrize("ttl", [0, -1])
+def test_token_ttl_must_be_positive(ttl):
+    with pytest.raises(ValidationError, match="greater than 0"):
+        BlindfoldConfig.model_validate({"tokens": {"default_ttl": ttl}})
