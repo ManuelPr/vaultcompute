@@ -1,15 +1,31 @@
 [project]
 name = "blindfold"
-version = "0.0.1"
+version = "0.1.0"
 description = "Privacy proxy for LLM tool calls — tokenize tool results, blind-compute, rehydrate."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
+authors = [{ name = "Manuel Pernigotto" }]
+keywords = ["llm", "mcp", "privacy", "tokenization"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
 dependencies = [
     "mcp>=1.0",
     "pydantic>=2.6",
     "pyyaml>=6.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ManuelPr/blindfold"
+Repository = "https://github.com/ManuelPr/blindfold"
+Issues = "https://github.com/ManuelPr/blindfold/issues"
+Changelog = "https://github.com/ManuelPr/blindfold/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 demo = [

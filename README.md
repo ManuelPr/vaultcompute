@@ -549,4 +549,4 @@ Issues and PRs welcome. Especially wanted: storage/policy adapters, red-teaming 
 
 ## License
 
-MIT (proposed).
+[MIT](LICENSE).
