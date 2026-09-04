@@ -518,7 +518,9 @@ Ordered by what the current release most needs, not by ambition.
 - [ ] Docker sandbox — the OS-level answer to network and filesystem, after the cheap in-process measures
 - [ ] HTTP proxy mode for plain REST APIs
 - [ ] Redis + Postgres adapters, webhook policy, audit log exporter
-- [ ] Optional inbound prompt tokenization (NER)
+- [ ] Optional inbound prompt tokenization (NER) — architecture spike complete;
+  it also requires a trusted tool-argument resolution boundary. See
+  [`docs/spikes/inbound-prompt-ner.md`](docs/spikes/inbound-prompt-ner.md).
 - [ ] Richer CaMeL-style capability propagation beyond exact Mode B table queries
 
 ## Documentation

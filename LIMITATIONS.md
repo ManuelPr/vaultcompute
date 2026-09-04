@@ -81,7 +81,11 @@ That limit is deliberately a rate, not a lifetime count. A flat cap on total reu
 ### The user's prompt is not protected
 Blindfold intercepts **tool results**, not the user's original question. If the user types *"What is Andrea Tuscano's salary?"*, the name and the intent go to the LLM provider in cleartext. Only the tool response gets tokenized.
 
-**Mitigation:** an optional inbound NER pass over prompts is on the roadmap. It will cost answer quality (the model reasons more poorly over its own tokenized inputs).
+**Mitigation:** optional inbound NER remains on the roadmap. The
+[architecture spike](docs/spikes/inbound-prompt-ner.md) found that detection
+alone is insufficient: placeholders used in model-proposed tool arguments also
+need a trusted, same-session resolution boundary. It will cost answer quality,
+and a detector miss still passes cleartext.
 
 ### Access control between users and their own APIs is out of scope
 Blindfold forwards requests untouched and lets the downstream API enforce its own ACLs. If that API answers everyone with a valid service token, Blindfold faithfully tokenizes whatever the caller could have obtained. Blindfold does not upgrade privileges, but it does not downgrade them either — enforcement has to live upstream.
@@ -222,7 +226,9 @@ The subprocess sandbox is the one place where real values meet code the model wr
 
   What it does not do: aggregate across two tables, group by a column, or join. Those are the obvious next operations and none of them is in yet.
 
-- **No inbound prompt NER.** Only outbound tool-response tokenization.
+- **No inbound prompt NER.** Only outbound tool-response tokenization. The
+  [spike](docs/spikes/inbound-prompt-ner.md) defines the additional trusted
+  tool-input boundary required before this can be added coherently.
 
 ### Model UX
 - **Token meaning is declared per-path on the tool, not per-token on the result.** The proxy appends each tool's protected paths — with their `semantic_type` and `unit` — to that tool's `description`, so the model is told once rather than on every call. Two consequences: (a) tokens sharing a path share one description, so the model can only tell them apart by their position in the JSON — fine while tokens stay in place, insufficient once collective (table) tokens land; (b) the description is static, derived from config, so it names paths the tool *may* return, not the ones a given response actually contained.
