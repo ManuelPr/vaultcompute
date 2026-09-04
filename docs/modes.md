@@ -157,6 +157,7 @@ The safe path:
    cooperative-model decision.
 4. **Render only the final answer** with
    `session.render_final_answer(model_answer)` immediately before display.
+   Its return value is cleartext for the user; never add it to model history.
 
 For user-intent authorization, the trusted application can issue a
 `TableQueryCapability` and call `session.execute_authorized_query(...,
@@ -189,6 +190,7 @@ against the Anthropic SDK.
 
 The primitive tokenizer, rehydrator and handlers remain available as an
 advanced API for integrations that need custom orchestration.
+The exact supported imports are documented in [`api.md`](api.md).
 
 **Pick it by default** when you write the loop or need the strongest available
 boundary. This is the reference mode because your application owns every seam.

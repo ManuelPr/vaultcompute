@@ -23,6 +23,9 @@ from blindfold.ports.policy import DetokenizePolicy
 from blindfold.ports.token_store import TokenStore
 from blindfold.tools.blindfold_table import handle_blindfold_table
 
+__all__ = ["BlindfoldSession"]
+
+
 class BlindfoldSession:
     """Own the safe Mode B path from tool result to user-visible answer."""
 

@@ -312,6 +312,10 @@ The recommended Mode B API is intentionally small:
 - `execute_authorized_query()` — run an exact capability-bound table query;
 - `render_final_answer()` — reveal placeholders only at the user boundary.
 
+The supported imports and compatibility promise are listed in
+[`docs/api.md`](docs/api.md). In particular, rendered cleartext belongs only at
+the UI boundary; never append it to the next model turn.
+
 ## Configuration
 
 Everything deployment-specific lives in one file. **This is the whole of what the current release reads:**
@@ -522,6 +526,7 @@ Ordered by what the current release most needs, not by ambition.
 ### Current — kept in step with the code
 
 - **[`docs/modes.md`](docs/modes.md)** — which of the four integration modes you want, what each one can and cannot do, and the one question that decides it. Read this before installing anything.
+- **[`docs/api.md`](docs/api.md)** — the supported Python imports, the small Mode B surface, and its boundary contract.
 - **[`docs/host-adapters.md`](docs/host-adapters.md)** — exact Claude Code and Codex coverage, failure behavior, compatibility testing, and the evidence required before building a custom client.
 - **[`docs/architecture.md`](docs/architecture.md)** — how the code actually works. Component-by-component tour with a full end-to-end frame-by-frame example. Start here after this README.
 - **[`LIMITATIONS.md`](LIMITATIONS.md)** — what Blindfold does *not* do, split into by-design (permanent) and MVP (temporary), with a cost estimate on every closable gap. Read before deploying against real data.
