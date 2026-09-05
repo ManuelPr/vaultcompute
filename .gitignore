@@ -40,15 +40,21 @@ htmlcov/
 *.swp
 .DS_Store
 
-# Blindfold local artifacts
+# VaultCompute local artifacts
 vault.db
 vault.db-wal
 vault.db-shm
 *.db-wal
 *.db-shm
+vaultcompute.yaml
+vaultcompute-proxy.yaml
+.mcp.json
+*.vaultcompute.log
+
+# Pre-rename local files may contain real schemas or secrets. Keep them ignored
+# so an existing checkout cannot accidentally stage them during migration.
 blindfold.yaml
 blindfold-proxy.yaml
-.mcp.json
 *.blindfold.log
 
 # Local development scaffolding — tooling and scratch harnesses, not part of

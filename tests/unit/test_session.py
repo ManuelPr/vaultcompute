@@ -2,15 +2,15 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from blindfold import BlindfoldSession
-from blindfold.config import BlindfoldConfig
-from blindfold.core.capabilities import TableQueryCapability
-from blindfold.core.vault import MemoryTokenStore
-from blindfold.errors import ProtectionError
+from vaultcompute import VaultComputeSession
+from vaultcompute.config import VaultComputeConfig
+from vaultcompute.core.capabilities import TableQueryCapability
+from vaultcompute.core.vault import MemoryTokenStore
+from vaultcompute.errors import ProtectionError
 
 
-def _config() -> BlindfoldConfig:
-    return BlindfoldConfig.model_validate(
+def _config() -> VaultComputeConfig:
+    return VaultComputeConfig.model_validate(
         {
             "schemas": {
                 "get_employee": {
@@ -33,7 +33,7 @@ def _config() -> BlindfoldConfig:
 
 
 def test_session_protects_and_renders_a_tool_result():
-    session = BlindfoldSession(_config(), session_id="s")
+    session = VaultComputeSession(_config(), session_id="s")
 
     protected = session.protect_tool_result(
         "get_employee", {"name": "Ada", "salary": 71000}
@@ -46,7 +46,7 @@ def test_session_protects_and_renders_a_tool_result():
 
 def test_session_fails_closed_for_unknown_tool_or_missing_required_path():
     store = MemoryTokenStore()
-    session = BlindfoldSession(_config(), session_id="s", store=store)
+    session = VaultComputeSession(_config(), session_id="s", store=store)
 
     with pytest.raises(ProtectionError, match="no protected schema"):
         session.protect_tool_result("unconfigured", {"salary": 71000})
@@ -57,13 +57,13 @@ def test_session_fails_closed_for_unknown_tool_or_missing_required_path():
 
 
 def test_optional_path_may_be_absent():
-    session = BlindfoldSession(_config(), session_id="s")
+    session = VaultComputeSession(_config(), session_id="s")
     protected = session.protect_tool_result("get_employee", {"salary": 71000})
     assert "bonus" not in protected
 
 
 def test_declared_table_must_be_present_and_a_list():
-    session = BlindfoldSession(_config(), session_id="s")
+    session = VaultComputeSession(_config(), session_id="s")
 
     with pytest.raises(ProtectionError, match="missing required"):
         session.protect_tool_result("list_employees", {})
@@ -72,7 +72,7 @@ def test_declared_table_must_be_present_and_a_list():
 
 
 def test_call_protected_tool_returns_only_the_protected_result():
-    session = BlindfoldSession(_config(), session_id="s")
+    session = VaultComputeSession(_config(), session_id="s")
 
     protected = session.call_protected_tool(
         "get_employee", lambda employee_id: {"id": employee_id, "salary": 71000}, 4
@@ -84,7 +84,7 @@ def test_call_protected_tool_returns_only_the_protected_result():
 
 def test_call_protected_tool_propagates_failure_without_minting_tokens():
     store = MemoryTokenStore()
-    session = BlindfoldSession(_config(), session_id="s", store=store)
+    session = VaultComputeSession(_config(), session_id="s", store=store)
 
     def failing_tool():
         raise RuntimeError("tool failed")
@@ -96,7 +96,7 @@ def test_call_protected_tool_propagates_failure_without_minting_tokens():
 
 
 async def test_call_protected_tool_async_returns_only_the_protected_result():
-    session = BlindfoldSession(_config(), session_id="s")
+    session = VaultComputeSession(_config(), session_id="s")
 
     async def get_employee(employee_id):
         return {"id": employee_id, "salary": 71000}
@@ -110,7 +110,7 @@ async def test_call_protected_tool_async_returns_only_the_protected_result():
 
 
 def test_authorized_query_requires_and_enforces_exact_capability():
-    session = BlindfoldSession(_config(), session_id="s")
+    session = VaultComputeSession(_config(), session_id="s")
     protected = session.protect_tool_result(
         "list_employees",
         {"employees": [{"name": "Ada", "salary": 71000}]},
@@ -142,7 +142,7 @@ def test_authorized_query_requires_and_enforces_exact_capability():
     ],
 )
 def test_capability_rejects_adaptive_or_cross_table_queries(query_change, message):
-    session = BlindfoldSession(_config(), session_id="s")
+    session = VaultComputeSession(_config(), session_id="s")
     protected = session.protect_tool_result(
         "list_employees",
         {"employees": [{"name": "Ada", "salary": 71000}]},
@@ -166,7 +166,7 @@ def test_capability_rejects_adaptive_or_cross_table_queries(query_change, messag
 
 
 def test_capability_rejects_another_session_and_expiry():
-    owner = BlindfoldSession(_config(), session_id="owner")
+    owner = VaultComputeSession(_config(), session_id="owner")
     protected = owner.protect_tool_result(
         "list_employees", {"employees": [{"name": "Ada", "salary": 71000}]}
     )
@@ -178,7 +178,7 @@ def test_capability_rejects_another_session_and_expiry():
         ops=query["ops"],
         expires_at=datetime.now(tz=timezone.utc) + timedelta(minutes=1),
     )
-    other = BlindfoldSession(
+    other = VaultComputeSession(
         _config(), session_id="other", store=owner.store, policy=owner.policy
     )
     with pytest.raises(ValueError, match="another session"):
@@ -195,11 +195,11 @@ def test_capability_rejects_another_session_and_expiry():
 
 
 def test_rendering_unknown_and_cross_session_tokens_never_reveals_values():
-    owner = BlindfoldSession(_config(), session_id="owner")
+    owner = VaultComputeSession(_config(), session_id="owner")
     protected = owner.protect_tool_result(
         "get_employee", {"name": "Ada", "salary": 71000}
     )
-    other = BlindfoldSession(
+    other = VaultComputeSession(
         _config(), session_id="other", store=owner.store, policy=owner.policy
     )
 
@@ -211,7 +211,7 @@ def test_rendering_unknown_and_cross_session_tokens_never_reveals_values():
 
 
 def test_reusing_a_capability_cannot_change_what_it_authorizes():
-    session = BlindfoldSession(_config(), session_id="s")
+    session = VaultComputeSession(_config(), session_id="s")
     protected = session.protect_tool_result(
         "list_employees", {"employees": [{"name": "Ada", "salary": 71000}]}
     )
@@ -236,6 +236,6 @@ def test_reusing_a_capability_cannot_change_what_it_authorizes():
 
 
 def test_model_instructions_are_owned_by_the_session():
-    session = BlindfoldSession(_config(), session_id="s")
+    session = VaultComputeSession(_config(), session_id="s")
     assert "get_employee" in session.model_instructions
     assert "never" in session.model_instructions.lower()

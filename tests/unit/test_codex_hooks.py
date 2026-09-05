@@ -3,19 +3,19 @@
 import io
 import json
 
-from blindfold import hooks
-from blindfold.cli import run_hook
-from blindfold.config import BlindfoldConfig, SensitiveFieldConfig, ToolSchemaConfig
-from blindfold.core.policy import SessionBoundPolicy
-from blindfold.core.sqlite_store import SQLiteTokenStore
-from blindfold.hosts import CODEX
+from vaultcompute import hooks
+from vaultcompute.cli import run_hook
+from vaultcompute.config import VaultComputeConfig, SensitiveFieldConfig, ToolSchemaConfig
+from vaultcompute.core.policy import SessionBoundPolicy
+from vaultcompute.core.sqlite_store import SQLiteTokenStore
+from vaultcompute.hosts import CODEX
 
 TOOL = "mcp__hr__get_salary"
 SESSION = "codex-session-1"
 
 
-def _config() -> BlindfoldConfig:
-    return BlindfoldConfig(
+def _config() -> VaultComputeConfig:
+    return VaultComputeConfig(
         schemas={
             TOOL: ToolSchemaConfig(
                 sensitive_fields=[SensitiveFieldConfig(path="$.salary")]
@@ -121,7 +121,7 @@ def test_codex_has_no_message_display_event():
 
 
 def test_codex_cli_selects_the_codex_adapter(monkeypatch, capsys, tmp_path):
-    cfg = tmp_path / "blindfold.yaml"
+    cfg = tmp_path / "vaultcompute.yaml"
     cfg.write_text(
         f"storage:\n  backend: sqlite\n  path: {tmp_path / 'vault.db'}\n"
         f"schemas:\n  {TOOL}:\n    sensitive_fields:\n      - path: $.salary\n",

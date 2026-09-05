@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from blindfold.config import (
+from vaultcompute.config import (
     build_token_store,
     describe_config,
-    BlindfoldConfig,
+    VaultComputeConfig,
     ComputeConfig,
     ProxyConfig,
     SensitiveFieldConfig,
@@ -18,15 +18,15 @@ from blindfold.config import (
     schema_fields_for,
     schema_fields_for_resource,
 )
-from blindfold.core.rehydrator import PLACEHOLDER_PROMPT
-from blindfold.core.sqlite_store import SQLiteTokenStore, VaultKeyError
-from blindfold.core.tokenizer import SchemaField
-from blindfold.core.vault import MemoryTokenStore
+from vaultcompute.core.rehydrator import PLACEHOLDER_PROMPT
+from vaultcompute.core.sqlite_store import SQLiteTokenStore, VaultKeyError
+from vaultcompute.core.tokenizer import SchemaField
+from vaultcompute.core.vault import MemoryTokenStore
 
 
 def test_load_missing_file_returns_defaults(tmp_path: Path):
     cfg = load_config(tmp_path / "does-not-exist.yaml")
-    assert cfg == BlindfoldConfig()
+    assert cfg == VaultComputeConfig()
     assert cfg.tokens.default_ttl == 3600
     assert cfg.schemas == {}
     assert cfg.compute.mode == "controlled"
@@ -59,11 +59,11 @@ def test_proxy_can_be_made_permissive_only_explicitly():
 )
 def test_typos_inside_security_sections_are_refused(section):
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        BlindfoldConfig.model_validate(section)
+        VaultComputeConfig.model_validate(section)
 
 
 def test_load_full_config(tmp_path: Path):
-    p = tmp_path / "blindfold.yaml"
+    p = tmp_path / "vaultcompute.yaml"
     p.write_text(
         """
 schemas:
@@ -87,10 +87,10 @@ tokens:
 
 
 def test_compute_rate_limit_defaults_and_is_configurable(tmp_path: Path):
-    assert BlindfoldConfig().compute.max_calls_per_token == 8
-    assert BlindfoldConfig().compute.rate_window_s == 60
+    assert VaultComputeConfig().compute.max_calls_per_token == 8
+    assert VaultComputeConfig().compute.rate_window_s == 60
 
-    p = tmp_path / "blindfold.yaml"
+    p = tmp_path / "vaultcompute.yaml"
     p.write_text("compute:\n  max_calls_per_token: 3\n  rate_window_s: 30\n", encoding="utf-8")
     cfg = load_config(p)
     assert cfg.compute.max_calls_per_token == 3
@@ -111,7 +111,7 @@ def test_compute_rate_limit_rejects_unsafe_ranges(values):
 
 
 def test_unknown_top_level_keys_tolerated(tmp_path: Path):
-    p = tmp_path / "blindfold.yaml"
+    p = tmp_path / "vaultcompute.yaml"
     p.write_text(
         """
 schemas: {}
@@ -131,7 +131,7 @@ identity:
 
 
 def test_schema_fields_for_present():
-    cfg = BlindfoldConfig(
+    cfg = VaultComputeConfig(
         schemas={
             "hr.get_salary": ToolSchemaConfig(
                 sensitive_fields=[
@@ -146,7 +146,7 @@ def test_schema_fields_for_present():
 
 
 def test_schema_fields_for_missing_returns_empty():
-    cfg = BlindfoldConfig()
+    cfg = VaultComputeConfig()
     assert schema_fields_for(cfg, "unknown.tool") == []
 
 
@@ -158,7 +158,7 @@ def test_schema_fields_for_missing_returns_empty():
 
 
 def test_load_rejects_recursive_descent(tmp_path: Path):
-    p = tmp_path / "blindfold.yaml"
+    p = tmp_path / "vaultcompute.yaml"
     p.write_text(
         """
 schemas:
@@ -174,7 +174,7 @@ schemas:
 
 
 def test_load_rejects_filter_expression(tmp_path: Path):
-    p = tmp_path / "blindfold.yaml"
+    p = tmp_path / "vaultcompute.yaml"
     p.write_text(
         """
 schemas:
@@ -190,7 +190,7 @@ schemas:
 
 
 def test_load_accepts_the_supported_dialect(tmp_path: Path):
-    p = tmp_path / "blindfold.yaml"
+    p = tmp_path / "vaultcompute.yaml"
     p.write_text(
         """
 schemas:
@@ -210,7 +210,7 @@ schemas:
 
 
 def _write(tmp_path: Path, body: str) -> Path:
-    p = tmp_path / "blindfold.yaml"
+    p = tmp_path / "vaultcompute.yaml"
     p.write_text(body, encoding="utf-8")
     return p
 
@@ -250,7 +250,7 @@ def test_unknown_backend_is_refused(tmp_path: Path):
 def test_encrypt_at_rest_without_a_key_refuses_to_build_a_store(tmp_path: Path, monkeypatch):
     # The config parses; the store refuses to open. Accepting it silently would
     # give a config that claims encryption over a cleartext file.
-    monkeypatch.delenv("BLINDFOLD_VAULT_KEY", raising=False)
+    monkeypatch.delenv("VAULTCOMPUTE_VAULT_KEY", raising=False)
     cfg = load_config(
         _write(
             tmp_path,
@@ -259,7 +259,7 @@ def test_encrypt_at_rest_without_a_key_refuses_to_build_a_store(tmp_path: Path, 
     )
     with pytest.raises(VaultKeyError) as ei:
         build_token_store(cfg)
-    assert "BLINDFOLD_VAULT_KEY" in str(ei.value)
+    assert "VAULTCOMPUTE_VAULT_KEY" in str(ei.value)
 
 
 def test_encrypt_at_rest_is_meaningless_in_memory(tmp_path: Path):
@@ -269,7 +269,7 @@ def test_encrypt_at_rest_is_meaningless_in_memory(tmp_path: Path):
 
 
 def test_encrypt_at_rest_with_a_key_builds_an_encrypting_store(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("BLINDFOLD_VAULT_KEY", base64.b64encode(os.urandom(32)).decode())
+    monkeypatch.setenv("VAULTCOMPUTE_VAULT_KEY", base64.b64encode(os.urandom(32)).decode())
     cfg = load_config(
         _write(
             tmp_path,
@@ -287,7 +287,7 @@ def test_encrypt_at_rest_with_a_key_builds_an_encrypting_store(tmp_path: Path, m
 
 
 def test_describe_config_lists_every_tool_and_path():
-    cfg = BlindfoldConfig(
+    cfg = VaultComputeConfig(
         schemas={
             "hr.get_salary": ToolSchemaConfig(
                 sensitive_fields=[
@@ -307,24 +307,24 @@ def test_describe_config_lists_every_tool_and_path():
 def test_describe_config_carries_the_shipped_prompt_fragment():
     # One source of truth: the instruction that keeps rehydration working must
     # not drift between the constant and the briefing.
-    cfg = BlindfoldConfig(
+    cfg = VaultComputeConfig(
         schemas={"t": ToolSchemaConfig(sensitive_fields=[SensitiveFieldConfig(path="$.x")])}
     )
     assert PLACEHOLDER_PROMPT in describe_config(cfg)
 
 
 def test_describe_config_is_none_without_declarations():
-    assert describe_config(BlindfoldConfig()) is None
+    assert describe_config(VaultComputeConfig()) is None
 
 
 def test_prompt_fragment_is_importable_from_the_package_root():
-    from blindfold import PLACEHOLDER_PROMPT as top_level
-    from blindfold import describe_config as top_level_fn
+    from vaultcompute import PLACEHOLDER_PROMPT as top_level
+    from vaultcompute import describe_config as top_level_fn
 
     assert top_level is PLACEHOLDER_PROMPT
     assert top_level_fn is describe_config
     assert "VERBATIM" in top_level
-    assert "blindfold_compute" in top_level
+    assert "vault_compute" in top_level
 
 
 def test_prompt_fragment_tells_the_model_to_admit_failure():
@@ -424,7 +424,7 @@ def test_overlapping_patterns_do_not_declare_the_same_path_twice(tmp_path: Path)
 
 
 def test_protected_paths_are_required_by_default_but_can_be_optional():
-    config = BlindfoldConfig.model_validate(
+    config = VaultComputeConfig.model_validate(
         {
             "schemas": {
                 "get_employee": {
@@ -453,4 +453,4 @@ def test_protected_paths_are_required_by_default_but_can_be_optional():
 @pytest.mark.parametrize("ttl", [0, -1])
 def test_token_ttl_must_be_positive(ttl):
     with pytest.raises(ValidationError, match="greater than 0"):
-        BlindfoldConfig.model_validate({"tokens": {"default_ttl": ttl}})
+        VaultComputeConfig.model_validate({"tokens": {"default_ttl": ttl}})

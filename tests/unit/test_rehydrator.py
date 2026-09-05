@@ -1,10 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
-from blindfold.core.lineage import Lineage, Policy, VaultRecord
-from blindfold.core.policy import SessionBoundPolicy
-from blindfold.core.rehydrator import PLACEHOLDER_PROMPT, TOKEN_PATTERN, rehydrate
-from blindfold.core.vault import MemoryTokenStore
-from blindfold.ports.token_store import TokenStore
+from vaultcompute.core.lineage import Lineage, Policy, VaultRecord
+from vaultcompute.core.policy import SessionBoundPolicy
+from vaultcompute.core.rehydrator import PLACEHOLDER_PROMPT, TOKEN_PATTERN, rehydrate
+from vaultcompute.core.vault import MemoryTokenStore
+from vaultcompute.ports.token_store import TokenStore
 
 
 def _put(store: MemoryTokenStore, token: str, value, *, session="s", reveal: bool = True) -> None:
@@ -102,6 +102,6 @@ def test_rehydrate_does_not_match_similar_but_wrong_syntax():
 
 
 def test_rehydrate_public_from_top_level_module():
-    from blindfold import rehydrate as top_level_rehydrate
+    from vaultcompute import rehydrate as top_level_rehydrate
 
     assert top_level_rehydrate is rehydrate

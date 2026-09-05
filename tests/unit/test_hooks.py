@@ -10,15 +10,15 @@ import json
 
 import pytest
 
-from blindfold import hooks
-from blindfold.cli import run_hook
-from blindfold.config import (
-    BlindfoldConfig,
+from vaultcompute import hooks
+from vaultcompute.cli import run_hook
+from vaultcompute.config import (
+    VaultComputeConfig,
     SensitiveFieldConfig,
     ToolSchemaConfig,
 )
-from blindfold.core.policy import SessionBoundPolicy
-from blindfold.core.sqlite_store import SQLiteTokenStore
+from vaultcompute.core.policy import SessionBoundPolicy
+from vaultcompute.core.sqlite_store import SQLiteTokenStore
 
 TOOL = "mcp__hr__get_salary"
 SESSION = "sess_abc123"
@@ -26,7 +26,7 @@ SESSION = "sess_abc123"
 
 @pytest.fixture
 def config():
-    return BlindfoldConfig(
+    return VaultComputeConfig(
         schemas={
             TOOL: ToolSchemaConfig(
                 sensitive_fields=[
@@ -109,7 +109,7 @@ def test_tool_without_declared_fields_is_left_alone(config, vault_path):
 
 
 def test_pre_tool_use_denies_a_configured_builtin_without_an_output_adapter(vault_path):
-    config = BlindfoldConfig(
+    config = VaultComputeConfig(
         schemas={
             "Read": ToolSchemaConfig(
                 sensitive_fields=[SensitiveFieldConfig(path="$.salary")]
@@ -131,7 +131,7 @@ def test_pre_tool_use_allows_only_supported_protected_shapes(config, tool):
     if tool == TOOL:
         selected = config
     else:
-        selected = BlindfoldConfig(
+        selected = VaultComputeConfig(
             schemas={
                 tool: ToolSchemaConfig(
                     sensitive_fields=[SensitiveFieldConfig(path="$.salary")]
@@ -142,7 +142,7 @@ def test_pre_tool_use_allows_only_supported_protected_shapes(config, tool):
 
 
 def test_bash_rewrite_preserves_the_documented_output_shape(vault_path):
-    config = BlindfoldConfig(
+    config = VaultComputeConfig(
         schemas={
             "Bash": ToolSchemaConfig(
                 sensitive_fields=[SensitiveFieldConfig(path="$.salary")]
@@ -174,7 +174,7 @@ def test_bash_rewrite_preserves_the_documented_output_shape(vault_path):
 
 
 def test_bash_with_unclassified_stderr_stops_before_another_model_request(vault_path):
-    config = BlindfoldConfig(
+    config = VaultComputeConfig(
         schemas={
             "Bash": ToolSchemaConfig(
                 sensitive_fields=[SensitiveFieldConfig(path="$.salary")]
@@ -305,7 +305,7 @@ def test_the_real_mcp_event_shape_is_tokenized(config, vault_path):
 
 
 def test_multiple_content_parts_are_not_guessed_at(config, vault_path):
-    # Blindfold has no story yet for stitching several parts into one JSON
+    # VaultCompute has no story yet for stitching several parts into one JSON
     # document — block rather than silently mask only one of them.
     store = _store(vault_path)
     try:
@@ -448,7 +448,7 @@ def _run(monkeypatch, capsys, event_name, payload, config_path):
 
 
 def _write_config(tmp_path, backend: str, vault_path) -> str:
-    p = tmp_path / "blindfold.yaml"
+    p = tmp_path / "vaultcompute.yaml"
     p.write_text(
         f"storage:\n  backend: {backend}\n  path: {vault_path}\n"
         f"schemas:\n  {TOOL}:\n    sensitive_fields:\n      - path: $.salary\n",
@@ -549,12 +549,12 @@ def test_session_start_tells_the_model_how_to_operate_and_to_copy_verbatim(confi
     brief = hooks.handle_session_start({"session_id": SESSION}, config=config)[
         "hookSpecificOutput"
     ]["additionalContext"]
-    assert "blindfold_compute" in brief
+    assert "vault_compute" in brief
     assert "VERBATIM" in brief
 
 
 def test_session_start_is_silent_when_nothing_is_declared():
-    assert hooks.handle_session_start({"session_id": SESSION}, config=BlindfoldConfig()) is None
+    assert hooks.handle_session_start({"session_id": SESSION}, config=VaultComputeConfig()) is None
 
 
 def test_session_start_never_contains_a_real_value(config):
@@ -590,9 +590,9 @@ TABLE_TOOL = "mcp__hr__list_employees"
 
 @pytest.fixture
 def table_config():
-    from blindfold.config import ColumnConfig, TableConfig
+    from vaultcompute.config import ColumnConfig, TableConfig
 
-    return BlindfoldConfig(
+    return VaultComputeConfig(
         schemas={
             TABLE_TOOL: ToolSchemaConfig(
                 tables=[
@@ -634,8 +634,8 @@ def test_a_table_only_tool_is_tokenized_by_the_hook(table_config, vault_path):
 
 
 def test_the_table_token_is_queryable_from_another_process(table_config, vault_path):
-    from blindfold.core.policy import SessionBoundPolicy as _Policy
-    from blindfold.tools.blindfold_table import handle_blindfold_table
+    from vaultcompute.core.policy import SessionBoundPolicy as _Policy
+    from vaultcompute.tools.vault_table import handle_vault_table
 
     writer = _store(vault_path)
     try:
@@ -656,7 +656,7 @@ def test_the_table_token_is_queryable_from_another_process(table_config, vault_p
 
     reader = _store(vault_path)
     try:
-        derived = handle_blindfold_table(
+        derived = handle_vault_table(
             {"table": token, "ops": [{"op": "max", "column": "salary"}]},
             store=reader, policy=_Policy(), session_id=SESSION, ttl_seconds=3600,
         )

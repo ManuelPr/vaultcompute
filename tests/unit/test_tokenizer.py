@@ -2,14 +2,14 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from blindfold.core.tokenizer import (
+from vaultcompute.core.tokenizer import (
     SchemaField,
     describe_schema,
     tokenize_result,
     validate_path,
     _resolve_paths,
 )
-from blindfold.core.vault import MemoryTokenStore
+from vaultcompute.core.vault import MemoryTokenStore
 
 TTL = datetime.now(tz=timezone.utc) + timedelta(hours=1)
 TOKEN_RE = r"⟦tok_[0-9a-f]{32}⟧"
@@ -153,11 +153,11 @@ def test_describe_schema_is_one_line_per_field():
 
 def test_describe_schema_mentions_the_compute_tool():
     note = describe_schema([SchemaField(path="$.salary", semantic_type="salary")])
-    assert "blindfold_compute" in note
+    assert "vault_compute" in note
 
 
 def test_describe_schema_public_from_top_level_module():
-    from blindfold import describe_schema as top_level
+    from vaultcompute import describe_schema as top_level
 
     assert top_level is describe_schema
 

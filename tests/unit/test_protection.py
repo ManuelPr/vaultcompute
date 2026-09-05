@@ -2,11 +2,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from blindfold.core.lineage import Column, TableSchema
-from blindfold.core.protection import protect_result, protect_results
-from blindfold.core.tokenizer import SchemaField
-from blindfold.core.vault import MemoryTokenStore
-from blindfold.errors import ProtectionError
+from vaultcompute.core.lineage import Column, TableSchema
+from vaultcompute.core.protection import protect_result, protect_results
+from vaultcompute.core.tokenizer import SchemaField
+from vaultcompute.core.vault import MemoryTokenStore
+from vaultcompute.errors import ProtectionError
 
 
 TTL = datetime.now(tz=timezone.utc) + timedelta(hours=1)

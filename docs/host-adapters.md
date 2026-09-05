@@ -1,9 +1,9 @@
 # Host adapters: exact guarantees and limits
 
-Blindfold's privacy core is host-independent. A host adapter is the small layer
+VaultCompute's privacy core is host-independent. A host adapter is the small layer
 that answers four concrete questions for one client:
 
-1. When can Blindfold inspect or stop a tool call?
+1. When can VaultCompute inspect or stop a tool call?
 2. In what data shape does that host return the result?
 3. How can the original result be replaced before the next model request?
 4. Can the final answer be changed only on screen, without changing the
@@ -31,12 +31,12 @@ claims coverage for host paths that do not emit the required events.
 | User sees real values | yes | no | no | yes |
 
 “Yes” does not mean “every future tool shape.” It means the host supplies the
-required lifecycle event and Blindfold has an explicit adapter for the result
+required lifecycle event and VaultCompute has an explicit adapter for the result
 being admitted.
 
 ## Claude Code contract
 
-Blindfold currently admits:
+VaultCompute currently admits:
 
 - MCP results containing exactly one text part whose text is JSON. Both the
   observed list form and the object-with-`content` form are accepted.
@@ -54,11 +54,11 @@ adapters yet.
 
 After an admitted tool runs, three cases exist:
 
-1. Declared paths match: Blindfold stores the values and returns the same result
+1. Declared paths match: VaultCompute stores the values and returns the same result
    shape with placeholders.
-2. The result is not an accepted JSON shape: Blindfold stops before another
+2. The result is not an accepted JSON shape: VaultCompute stops before another
    model request.
-3. The JSON is valid but no declared path matches: Blindfold also stops. This
+3. The JSON is valid but no declared path matches: VaultCompute also stops. This
    is treated as response-shape drift, not as a successful empty rewrite.
 
 A missing or empty `session_id` is also a refusal. Host processes share a
@@ -71,11 +71,11 @@ that gives Mode C its complete user experience.
 
 The guarantee begins at the hook boundary. Claude Code may record local
 telemetry containing the original output before the post-tool hook runs; that
-storage is outside Blindfold's control.
+storage is outside VaultCompute's control.
 
 ## Codex contract
 
-Codex sends a structured `tool_response` to `PostToolUse`. Blindfold accepts a
+Codex sends a structured `tool_response` to `PostToolUse`. VaultCompute accepts a
 direct JSON object/list, a JSON string, a one-part MCP text result, or JSON in a
 shell result's `stdout` when `stderr` is empty. It returns the protected JSON as
 the post-tool stop text with `continue: false`. Codex replaces the original
@@ -86,7 +86,7 @@ MCP tools, and most local function tools. Hosted tools such as web search do
 not use that path, and specialized paths may opt out. A tool path that never
 fires the hook cannot be protected by this plugin.
 
-Codex has no display-only lifecycle event. Blindfold therefore never resolves
+Codex has no display-only lifecycle event. VaultCompute therefore never resolves
 a placeholder in ordinary Codex feedback: doing so would show the value to the
 model as well as the user. The user-visible token is a product limitation, not
 a tokenization bug.
@@ -98,7 +98,7 @@ turns that promise into an error.
 
 ## Compatibility verification
 
-The ordinary suite tests Blindfold's adapters with fixed event fixtures and
+The ordinary suite tests VaultCompute's adapters with fixed event fixtures and
 checks that both plugin files stay aligned with the command-line dispatcher:
 
 ```bash

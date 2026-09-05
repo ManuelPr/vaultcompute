@@ -1,7 +1,7 @@
 [project]
-name = "blindfold"
+name = "vaultcompute"
 version = "0.1.0"
-description = "Privacy proxy for LLM tool calls — tokenize tool results, blind-compute, rehydrate."
+description = "Controlled computation over private data for LLM applications."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -16,16 +16,16 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "mcp>=1.0",
+    "mcp>=1.0,<2",
     "pydantic>=2.6",
     "pyyaml>=6.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/ManuelPr/blindfold"
-Repository = "https://github.com/ManuelPr/blindfold"
-Issues = "https://github.com/ManuelPr/blindfold/issues"
-Changelog = "https://github.com/ManuelPr/blindfold/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/ManuelPr/vaultcompute"
+Repository = "https://github.com/ManuelPr/vaultcompute"
+Issues = "https://github.com/ManuelPr/vaultcompute/issues"
+Changelog = "https://github.com/ManuelPr/vaultcompute/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 demo = [
@@ -36,14 +36,14 @@ encryption = [
 ]
 
 [project.scripts]
-blindfold = "blindfold.cli:main"
+vaultcompute = "vaultcompute.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/blindfold"]
+packages = ["src/vaultcompute"]
 
 [dependency-groups]
 dev = [

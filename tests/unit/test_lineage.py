@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from blindfold.core.lineage import (
+from vaultcompute.core.lineage import (
     Lineage,
     Policy,
     VaultRecord,

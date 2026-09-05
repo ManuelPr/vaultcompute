@@ -11,10 +11,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from freezegun import freeze_time
 
-from blindfold.core.lineage import Lineage, Policy, VaultRecord
-from blindfold.core.sqlite_store import SQLiteTokenStore
-from blindfold.core.vault import MemoryTokenStore
-from blindfold.ports.token_store import TokenStore
+from vaultcompute.core.lineage import Lineage, Policy, VaultRecord
+from vaultcompute.core.sqlite_store import SQLiteTokenStore
+from vaultcompute.core.vault import MemoryTokenStore
+from vaultcompute.ports.token_store import TokenStore
 
 NOW = datetime(2026, 7, 15, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -135,9 +135,9 @@ def test_purge_expired_returns_how_many_it_removed(store):
 def test_invalidate_cascade_removes_descendants_only(store):
     store.put(_rec("⟦tok_00000001⟧"))
     store.put(_rec("⟦tok_00000002⟧"))
-    store.put(_rec("⟦tok_00000003⟧", inputs=("⟦tok_00000001⟧",), op="blind_compute"))
-    store.put(_rec("⟦tok_00000004⟧", inputs=("⟦tok_00000003⟧",), op="blind_compute"))
-    store.put(_rec("⟦tok_00000005⟧", inputs=("⟦tok_00000002⟧",), op="blind_compute"))
+    store.put(_rec("⟦tok_00000003⟧", inputs=("⟦tok_00000001⟧",), op="vault_compute"))
+    store.put(_rec("⟦tok_00000004⟧", inputs=("⟦tok_00000003⟧",), op="vault_compute"))
+    store.put(_rec("⟦tok_00000005⟧", inputs=("⟦tok_00000002⟧",), op="vault_compute"))
 
     assert store.invalidate_cascade("⟦tok_00000001⟧") == 3
 
@@ -160,7 +160,7 @@ def test_mint_token_comes_from_the_port(store):
 
 @freeze_time(NOW)
 def test_stores_survive_concurrent_use_from_threads(store):
-    # Not a persistence question: the proxy runs blind compute in a worker
+    # Not a persistence question: the proxy runs `vault_compute` in a worker
     # thread while the other pump keeps tokenizing tool results on the event
     # loop, so *every* store gets written from two threads at once.
     # purge_interval_s=0 makes each put sweep, which is where a store that
@@ -225,7 +225,7 @@ def test_compute_attempt_lifecycle_round_trips(store):
 def test_compute_quota_reservation_is_atomic(store):
     from concurrent.futures import ThreadPoolExecutor
 
-    from blindfold.core.compute_attempts import ComputeRateLimitError
+    from vaultcompute.core.compute_attempts import ComputeRateLimitError
 
     def reserve(index):
         try:
@@ -286,7 +286,7 @@ def test_sqlite_is_shared_between_two_open_connections(tmp_path):
 def test_sqlite_compute_quota_is_atomic_across_connections(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
 
-    from blindfold.core.compute_attempts import ComputeRateLimitError
+    from vaultcompute.core.compute_attempts import ComputeRateLimitError
 
     path = tmp_path / "vault.db"
     stores = [SQLiteTokenStore(path), SQLiteTokenStore(path)]
@@ -334,14 +334,14 @@ def test_sqlite_creates_missing_parent_directories(tmp_path):
 import base64
 import os
 
-from blindfold.core.sqlite_store import VaultKeyError
+from vaultcompute.core.sqlite_store import VaultKeyError
 
 KEY = base64.b64encode(bytes(range(32))).decode()
 
 
 @freeze_time(NOW)
 def test_encrypted_values_round_trip(tmp_path, monkeypatch):
-    monkeypatch.setenv("BLINDFOLD_VAULT_KEY", KEY)
+    monkeypatch.setenv("VAULTCOMPUTE_VAULT_KEY", KEY)
     store = SQLiteTokenStore(tmp_path / "vault.db", encrypt=True)
     try:
         store.put(_rec("⟦tok_00000001⟧", value={"iban": "IT60X0542811101000000123456"}))
@@ -352,7 +352,7 @@ def test_encrypted_values_round_trip(tmp_path, monkeypatch):
 
 @freeze_time(NOW)
 def test_the_value_is_not_in_the_file(tmp_path, monkeypatch):
-    monkeypatch.setenv("BLINDFOLD_VAULT_KEY", KEY)
+    monkeypatch.setenv("VAULTCOMPUTE_VAULT_KEY", KEY)
     path = tmp_path / "vault.db"
     store = SQLiteTokenStore(path, encrypt=True)
     try:
@@ -377,12 +377,12 @@ def test_a_cleartext_store_does_leave_the_value_in_the_file(tmp_path):
 @freeze_time(NOW)
 def test_the_wrong_key_does_not_silently_return_garbage(tmp_path, monkeypatch):
     path = tmp_path / "vault.db"
-    monkeypatch.setenv("BLINDFOLD_VAULT_KEY", KEY)
+    monkeypatch.setenv("VAULTCOMPUTE_VAULT_KEY", KEY)
     writer = SQLiteTokenStore(path, encrypt=True)
     writer.put(_rec("⟦tok_00000001⟧", value=71000))
     writer.close()
 
-    monkeypatch.setenv("BLINDFOLD_VAULT_KEY", base64.b64encode(bytes(32)).decode())
+    monkeypatch.setenv("VAULTCOMPUTE_VAULT_KEY", base64.b64encode(bytes(32)).decode())
     reader = SQLiteTokenStore(path, encrypt=True)
     try:
         with pytest.raises(VaultKeyError, match="would not open"):
@@ -394,7 +394,7 @@ def test_the_wrong_key_does_not_silently_return_garbage(tmp_path, monkeypatch):
 @freeze_time(NOW)
 def test_a_ciphertext_cannot_be_moved_to_another_row(tmp_path, monkeypatch):
     # The token is the associated data, so a stolen row does not open elsewhere.
-    monkeypatch.setenv("BLINDFOLD_VAULT_KEY", KEY)
+    monkeypatch.setenv("VAULTCOMPUTE_VAULT_KEY", KEY)
     path = tmp_path / "vault.db"
     store = SQLiteTokenStore(path, encrypt=True)
     try:
@@ -415,21 +415,21 @@ def test_a_ciphertext_cannot_be_moved_to_another_row(tmp_path, monkeypatch):
 def test_opening_a_cleartext_file_with_encryption_on_is_refused(tmp_path, monkeypatch):
     path = tmp_path / "vault.db"
     SQLiteTokenStore(path).close()
-    monkeypatch.setenv("BLINDFOLD_VAULT_KEY", KEY)
+    monkeypatch.setenv("VAULTCOMPUTE_VAULT_KEY", KEY)
     with pytest.raises(VaultKeyError, match="written cleartext"):
         SQLiteTokenStore(path, encrypt=True)
 
 
 def test_opening_an_encrypted_file_without_the_key_is_refused(tmp_path, monkeypatch):
     path = tmp_path / "vault.db"
-    monkeypatch.setenv("BLINDFOLD_VAULT_KEY", KEY)
+    monkeypatch.setenv("VAULTCOMPUTE_VAULT_KEY", KEY)
     SQLiteTokenStore(path, encrypt=True).close()
     with pytest.raises(VaultKeyError, match="written encrypted"):
         SQLiteTokenStore(path)
 
 
 def test_a_missing_key_says_how_to_make_one(tmp_path, monkeypatch):
-    monkeypatch.delenv("BLINDFOLD_VAULT_KEY", raising=False)
+    monkeypatch.delenv("VAULTCOMPUTE_VAULT_KEY", raising=False)
     with pytest.raises(VaultKeyError) as ei:
         SQLiteTokenStore(tmp_path / "vault.db", encrypt=True)
     assert "base64" in str(ei.value)

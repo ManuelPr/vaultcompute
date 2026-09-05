@@ -1,6 +1,6 @@
 name: CI
 
-# Blindfold was developed on Windows, and at least one behaviour differs by
+# VaultCompute was developed on Windows, and at least one behaviour differs by
 # platform for reasons nobody chose: the compute sandbox strips the environment,
 # and on Windows that removes SystemRoot, which happens to prevent sockets from
 # initialising. "It should work on Linux" stayed an assumption until this ran.

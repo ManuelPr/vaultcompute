@@ -1,7 +1,7 @@
 """Run the original three flows against the fake HR server and show what happens.
 
 No API key, no Ollama, no Docker. The "model" is scripted, because the point is
-to watch what Blindfold does to the data, not whether an LLM gets the answer
+to watch what VaultCompute does to the data, not whether an LLM gets the answer
 right.
 
     uv run python examples/try_modes.py           # proxy, library, Claude hooks
@@ -30,18 +30,18 @@ from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from blindfold import BlindfoldSession
-from blindfold.config import (
+from vaultcompute import VaultComputeSession
+from vaultcompute.config import (
     ComputeConfig,
     load_config,
     schema_fields_for,
     table_schemas_for,
 )
-from blindfold.core.policy import SessionBoundPolicy
-from blindfold.core.tokenizer import describe_schema, describe_tables
-from blindfold.core.vault import MemoryTokenStore
-from blindfold.sandbox.subprocess_ import SubprocessSandbox
-from blindfold.tools import blindfold_compute, blindfold_table
+from vaultcompute.core.policy import SessionBoundPolicy
+from vaultcompute.core.tokenizer import describe_schema, describe_tables
+from vaultcompute.core.vault import MemoryTokenStore
+from vaultcompute.sandbox.subprocess_ import SubprocessSandbox
+from vaultcompute.tools import vault_compute, vault_table
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
@@ -86,7 +86,7 @@ def show(label: str, value: object) -> None:
 
 
 async def mode_a(config_path: Path) -> None:
-    head("MODE A — CLI proxy.  blindfold -- python -m examples.fake_hr_mcp")
+    head("MODE A — CLI proxy.  vaultcompute -- python -m examples.fake_hr_mcp")
     print(
         "\nThe proxy sits between an MCP client and an MCP server. Nothing here\n"
         "is application code: this script is just an ordinary MCP client."
@@ -95,7 +95,7 @@ async def mode_a(config_path: Path) -> None:
     params = StdioServerParameters(
         command=sys.executable,
         args=[
-            "-m", "blindfold", "--config", str(config_path),
+            "-m", "vaultcompute", "--config", str(config_path),
             "--", sys.executable, "-m", "examples.fake_hr_mcp",
         ],
         env=ENV,
@@ -124,7 +124,7 @@ async def mode_a(config_path: Path) -> None:
 
             step("4", "The model queries the hidden table")
             queried = await session.call_tool(
-                "blindfold_table",
+                "vault_table",
                 {
                     "table": table_token,
                     "ops": [
@@ -156,10 +156,10 @@ async def mode_a(config_path: Path) -> None:
 
 
 async def mode_b(config_path: Path) -> None:
-    head("MODE B — in-process library.  from blindfold import ...")
+    head("MODE B — in-process library.  from vaultcompute import ...")
     print(
         "\nNo proxy. This is the agent loop you already have, using the safe\n"
-        "BlindfoldSession façade. The 'model' is scripted; no API key is needed."
+        "VaultComputeSession façade. The 'model' is scripted; no API key is needed."
     )
 
     config = load_config(config_path)
@@ -168,7 +168,7 @@ async def mode_b(config_path: Path) -> None:
     config = config.model_copy(update={"compute": ComputeConfig(mode="python_unsafe")})
     store, policy, sandbox = MemoryTokenStore(), SessionBoundPolicy(), SubprocessSandbox()
     session_id = f"user_{uuid.uuid4().hex[:8]}"
-    blindfold_session = BlindfoldSession(
+    vaultcompute_session = VaultComputeSession(
         config, session_id=session_id, store=store, policy=policy
     )
 
@@ -179,8 +179,8 @@ async def mode_b(config_path: Path) -> None:
         async with ClientSession(read, write) as session:
             await session.initialize()
 
-            step("1", "Use the model instructions owned by BlindfoldSession")
-            show("first line", blindfold_session.model_instructions.splitlines()[0])
+            step("1", "Use the model instructions owned by VaultComputeSession")
+            show("first line", vaultcompute_session.model_instructions.splitlines()[0])
 
             step("2+3", "Explicitly opt into python_unsafe and advertise compute tools")
             listed = await session.list_tools()
@@ -193,8 +193,8 @@ async def mode_b(config_path: Path) -> None:
                 note = "\n\n".join(n for n in notes if n)
                 tools.append({"name": t.name, "description": f"{t.description}\n\n{note}".strip()})
             tools += [
-                {"name": blindfold_compute.BLINDFOLD_COMPUTE_TOOL_NAME, "description": "..."},
-                {"name": blindfold_table.BLINDFOLD_TABLE_TOOL_NAME, "description": "..."},
+                {"name": vault_compute.VAULT_COMPUTE_TOOL_NAME, "description": "..."},
+                {"name": vault_table.VAULT_TABLE_TOOL_NAME, "description": "..."},
             ]
             show("tools passed to the LLM", [t["name"] for t in tools])
 
@@ -202,17 +202,17 @@ async def mode_b(config_path: Path) -> None:
             call = await session.call_tool("get_salary", {"name": "Manuel Pernigotto"})
             payload = json.loads(call.content[0].text)
             show("what the tool really returned", payload)
-            tokenized = blindfold_session.protect_tool_result("get_salary", payload)
+            tokenized = vaultcompute_session.protect_tool_result("get_salary", payload)
             show("what you feed the model", tokenized)
             manuel = tokenized["salary"]
 
             call = await session.call_tool("get_salary", {"name": "Andrea Tuscano"})
-            andrea = blindfold_session.protect_tool_result(
+            andrea = vaultcompute_session.protect_tool_result(
                 "get_salary", json.loads(call.content[0].text)
             )["salary"]
 
             step("5a", "Route the model's compute call")
-            derived = blindfold_compute.handle_blindfold_compute(
+            derived = vault_compute.handle_vault_compute(
                 {
                     "code": f"result = 'Andrea' if resolve({andrea!r}) > resolve({manuel!r}) else 'Manuel'",
                     "inputs": [andrea, manuel],
@@ -225,10 +225,10 @@ async def mode_b(config_path: Path) -> None:
             step("5b", "Rehydrate before display — this is the step Mode A cannot do")
             answer = f"{derived} earns more: {andrea} against {manuel}."
             show("the model wrote", answer)
-            show("the user reads", blindfold_session.render_final_answer(answer))
+            show("the user reads", vaultcompute_session.render_final_answer(answer))
 
             step("!", "A different user cannot resolve those placeholders")
-            other = BlindfoldSession(config, session_id="someone_else", store=store, policy=policy)
+            other = VaultComputeSession(config, session_id="someone_else", store=store, policy=policy)
             show("another session reads", other.render_final_answer(answer))
 
 
@@ -240,7 +240,7 @@ async def mode_b(config_path: Path) -> None:
 def hook(event: str, payload: dict, config_path: Path) -> dict | None:
     """One hook invocation — a separate process, exactly as the host does it."""
     proc = subprocess.run(
-        [sys.executable, "-m", "blindfold", "hook", event, "--config", str(config_path)],
+        [sys.executable, "-m", "vaultcompute", "hook", event, "--config", str(config_path)],
         input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8", env=ENV,
     )
     if proc.stderr.strip():
@@ -250,7 +250,7 @@ def hook(event: str, payload: dict, config_path: Path) -> dict | None:
 
 async def mode_c(workdir: Path) -> None:
     head("MODE C — Claude Code plugin.  four hooks + an MCP server")
-    config_path = workdir / "blindfold_c.yaml"
+    config_path = workdir / "vaultcompute_c.yaml"
     config_path.write_text(
         f"storage:\n  backend: sqlite\n  path: {workdir / 'vault.db'}\n{CONFIG}",
         encoding="utf-8",
@@ -287,7 +287,7 @@ async def mode_c(workdir: Path) -> None:
     step("3", "The MCP server — a third process, same vault")
     params = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "blindfold", "mcp-server", "--config", str(config_path)],
+        args=["-m", "vaultcompute", "mcp-server", "--config", str(config_path)],
         env=ENV,
     )
     async with stdio_client(params) as (read, write):
@@ -295,7 +295,7 @@ async def mode_c(workdir: Path) -> None:
             await session.initialize()
             show("tools it offers", [t.name for t in (await session.list_tools()).tools])
             res = await session.call_tool(
-                "blindfold_table",
+                "vault_table",
                 {"table": table_token, "ops": [{"op": "max", "column": "salary"}]},
             )
             top = res.content[0].text
@@ -319,7 +319,7 @@ async def mode_c(workdir: Path) -> None:
     print(
         "\n      To run it for real inside Claude Code:\n"
         "        uv tool install .\n"
-        "        cp blindfold.example.yaml blindfold.yaml   # add backend: sqlite\n"
+        "        cp vaultcompute.example.yaml vaultcompute.yaml   # add backend: sqlite\n"
         "        claude --plugin-dir ./plugin"
     )
 
@@ -331,7 +331,7 @@ async def main() -> None:
     which = (sys.argv[1].lower() if len(sys.argv) > 1 else "all")
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
-        config_path = workdir / "blindfold.yaml"
+        config_path = workdir / "vaultcompute.yaml"
         config_path.write_text(CONFIG, encoding="utf-8")
 
         if which in ("a", "all"):

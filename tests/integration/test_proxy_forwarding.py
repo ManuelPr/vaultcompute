@@ -1,4 +1,4 @@
-"""Integration: spins up `python -m blindfold` as a subprocess wrapping
+"""Integration: spins up `python -m vaultcompute` as a subprocess wrapping
 `python -m examples.fake_hr_mcp` and drives the raw MCP JSON-RPC over stdio.
 """
 
@@ -20,7 +20,7 @@ TOKEN_RE = re.compile(r"⟦tok_[0-9a-f]{32}⟧")
 
 @pytest_asyncio.fixture()
 async def proxy_subprocess(tmp_path: Path):
-    cfg = tmp_path / "blindfold.yaml"
+    cfg = tmp_path / "vaultcompute.yaml"
     cfg.write_text(
         """
 schemas:
@@ -36,7 +36,7 @@ compute:
     )
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     proc = await asyncio.create_subprocess_exec(
-        sys.executable, "-m", "blindfold",
+        sys.executable, "-m", "vaultcompute",
         "--config", str(cfg),
         "--",
         sys.executable, "-m", "examples.fake_hr_mcp",
@@ -91,7 +91,7 @@ async def test_tools_list_includes_injected_compute_tool(proxy_subprocess):
     resp = await _recv(proc)
     names = {t["name"] for t in resp["result"]["tools"]}
     assert "get_salary" in names
-    assert "blindfold_compute" in names
+    assert "vault_compute" in names
 
 
 async def test_get_salary_response_is_tokenized(proxy_subprocess):
@@ -109,7 +109,7 @@ async def test_get_salary_response_is_tokenized(proxy_subprocess):
     assert TOKEN_RE.fullmatch(parsed["salary"])
 
 
-async def test_blindfold_compute_returns_derived_token(proxy_subprocess):
+async def test_vault_compute_returns_derived_token(proxy_subprocess):
     proc = proxy_subprocess
     nid = await _initialize(proc, 1)
 
@@ -130,7 +130,7 @@ async def test_blindfold_compute_returns_derived_token(proxy_subprocess):
     a_tok, b_tok = a["salary"], b["salary"]
     await _send(proc, {
         "jsonrpc": "2.0", "id": nid, "method": "tools/call",
-        "params": {"name": "blindfold_compute", "arguments": {
+        "params": {"name": "vault_compute", "arguments": {
             "code": f"result = 'Manuel Pernigotto' if resolve({a_tok!r}) > resolve({b_tok!r}) else 'Andrea Tuscano'",
             "inputs": [a_tok, b_tok],
         }},
@@ -141,7 +141,7 @@ async def test_blindfold_compute_returns_derived_token(proxy_subprocess):
 
     nid += 1
     await _send(proc, {
-        "jsonrpc": "2.0", "id": nid, "method": "blindfold/rehydrate",
+        "jsonrpc": "2.0", "id": nid, "method": "vaultcompute/rehydrate",
         "params": {"text": f"The higher earner is {new_token}.", "session_id": "PROBE_SESSION_UNUSED"},
     })
     rehy = await _recv(proc)
@@ -158,7 +158,7 @@ async def test_protected_tool_description_explains_its_tokens(proxy_subprocess):
     assert "Return the annual gross salary in EUR" in described  # upstream text kept
     assert "$.salary" in described
     assert "EUR/year" in described
-    assert "blindfold_compute" in described
+    assert "vault_compute" in described
 
 
 async def test_tool_without_declared_fields_is_left_alone(proxy_subprocess):
@@ -167,7 +167,7 @@ async def test_tool_without_declared_fields_is_left_alone(proxy_subprocess):
     await _send(proc, {"jsonrpc": "2.0", "id": nid, "method": "tools/list", "params": {}})
     tools = {t["name"]: t for t in (await _recv(proc))["result"]["tools"]}
 
-    assert "Blindfold: values at these paths" not in tools["blindfold_compute"]["description"]
+    assert "VaultCompute: values at these paths" not in tools["vault_compute"]["description"]
 
 
 async def test_tool_result_carries_no_extra_parts(proxy_subprocess):

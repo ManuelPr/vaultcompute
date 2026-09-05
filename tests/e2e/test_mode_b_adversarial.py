@@ -4,13 +4,13 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from blindfold import BlindfoldSession, TableQueryCapability
-from blindfold.config import BlindfoldConfig
-from blindfold.errors import ProtectionError
+from vaultcompute import VaultComputeSession, TableQueryCapability
+from vaultcompute.config import VaultComputeConfig
+from vaultcompute.errors import ProtectionError
 
 
-def _session(session_id: str = "owner", **kwargs) -> BlindfoldSession:
-    config = BlindfoldConfig.model_validate(
+def _session(session_id: str = "owner", **kwargs) -> VaultComputeSession:
+    config = VaultComputeConfig.model_validate(
         {
             "schemas": {
                 "get_employee": {
@@ -27,7 +27,7 @@ def _session(session_id: str = "owner", **kwargs) -> BlindfoldSession:
             }
         }
     )
-    return BlindfoldSession(config, session_id=session_id, **kwargs)
+    return VaultComputeSession(config, session_id=session_id, **kwargs)
 
 
 def test_raw_tool_value_never_enters_the_model_visible_stream():

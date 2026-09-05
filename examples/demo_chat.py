@@ -1,4 +1,4 @@
-"""Interactive demo — Claude answering an HR question through Blindfold.
+"""Interactive demo — Claude answering an HR question through VaultCompute.
 
 Run with:
     uv run --extra demo python examples/demo_chat.py "Who earns more, Manuel Pernigotto or Andrea Tuscano?"
@@ -19,18 +19,18 @@ from anthropic import Anthropic
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from blindfold import BlindfoldSession
-from blindfold.config import (
-    BlindfoldConfig,
+from vaultcompute import VaultComputeSession
+from vaultcompute.config import (
+    VaultComputeConfig,
     ComputeConfig,
     SensitiveFieldConfig,
     ToolSchemaConfig,
 )
-from blindfold.sandbox.subprocess_ import SubprocessSandbox
-from blindfold.tools.blindfold_compute import (
-    BLINDFOLD_COMPUTE_TOOL_NAME,
+from vaultcompute.sandbox.subprocess_ import SubprocessSandbox
+from vaultcompute.tools.vault_compute import (
+    VAULT_COMPUTE_TOOL_NAME,
     build_tool_definition,
-    handle_blindfold_compute,
+    handle_vault_compute,
 )
 
 MODEL = "claude-opus-4-7"
@@ -39,7 +39,7 @@ MODEL = "claude-opus-4-7"
 async def _amain(question: str) -> None:
     sandbox = SubprocessSandbox()
     session_id = f"demo_{uuid.uuid4().hex[:8]}"
-    config = BlindfoldConfig(
+    config = VaultComputeConfig(
         schemas={
             "get_salary": ToolSchemaConfig(
                 sensitive_fields=[
@@ -51,7 +51,7 @@ async def _amain(question: str) -> None:
         # should prefer a declared table plus TableQueryCapability.
         compute=ComputeConfig(mode="python_unsafe"),
     )
-    blindfold = BlindfoldSession(config, session_id=session_id)
+    vaultcompute = VaultComputeSession(config, session_id=session_id)
 
     server_params = StdioServerParameters(
         command=sys.executable,
@@ -74,7 +74,7 @@ async def _amain(question: str) -> None:
             ]
             tool_def = build_tool_definition()
             tools.append({
-                "name": BLINDFOLD_COMPUTE_TOOL_NAME,
+                "name": VAULT_COMPUTE_TOOL_NAME,
                 "description": tool_def["description"],
                 "input_schema": tool_def["inputSchema"],
             })
@@ -86,7 +86,7 @@ async def _amain(question: str) -> None:
                 response = client.messages.create(
                     model=MODEL,
                     max_tokens=1024,
-                    system=blindfold.model_instructions,
+                    system=vaultcompute.model_instructions,
                     tools=tools,
                     messages=messages,
                 )
@@ -99,14 +99,14 @@ async def _amain(question: str) -> None:
                     if block.type != "tool_use":
                         continue
 
-                    if block.name == BLINDFOLD_COMPUTE_TOOL_NAME:
+                    if block.name == VAULT_COMPUTE_TOOL_NAME:
                         try:
-                            token = handle_blindfold_compute(
+                            token = handle_vault_compute(
                                 block.input,
-                                store=blindfold.store,
-                                policy=blindfold.policy,
+                                store=vaultcompute.store,
+                                policy=vaultcompute.policy,
                                 sandbox=sandbox,
-                                session_id=blindfold.session_id,
+                                session_id=vaultcompute.session_id,
                                 ttl_seconds=config.tokens.default_ttl,
                             )
                             tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": token})
@@ -122,7 +122,7 @@ async def _amain(question: str) -> None:
                         text = call.content[0].text if call.content else "{}"
                         return json.loads(text)
 
-                    protected = await blindfold.call_protected_tool_async(
+                    protected = await vaultcompute.call_protected_tool_async(
                         block.name, invoke_tool
                     )
                     text = json.dumps(protected, ensure_ascii=False)
@@ -131,7 +131,7 @@ async def _amain(question: str) -> None:
                 messages.append({"role": "user", "content": tool_results})
 
             final_text = "".join(b.text for b in response.content if b.type == "text")
-            print(blindfold.render_final_answer(final_text))
+            print(vaultcompute.render_final_answer(final_text))
 
 
 def main() -> None:

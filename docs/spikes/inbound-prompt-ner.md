@@ -2,7 +2,7 @@
 
 ## Question
 
-Can Blindfold hide personal data already present in a user's prompt by adding a
+Can VaultCompute hide personal data already present in a user's prompt by adding a
 NER pass before the prompt reaches the model?
 
 ## Result
@@ -16,7 +16,7 @@ model sees: What is ⟦tok_…⟧'s salary?
 model calls: get_salary(name="⟦tok_…⟧")
 ```
 
-The downstream tool needs the real name. Blindfold would therefore need a
+The downstream tool needs the real name. VaultCompute would therefore need a
 trusted input boundary that resolves exact, same-session placeholders inside
 tool arguments immediately before invocation. Adding only prompt replacement
 would either break the tool call or tempt an application to reveal the name to
@@ -31,7 +31,7 @@ user prompt
   -> model proposes tool arguments containing placeholders
   -> trusted dispatcher resolves allowed argument placeholders
   -> real tool runs locally
-  -> Blindfold protects its result
+  -> VaultCompute protects its result
   -> protected result returns to model
 ```
 
@@ -61,4 +61,4 @@ and false negatives could make it look safer than it is.
 Keep this as an optional post-0.1 feature. Its first implementation should be a
 Mode B experiment containing both prompt protection and tool-argument
 resolution; only then evaluate detector quality on representative languages and
-data. Until that exists, prompts remain outside Blindfold's protection claim.
+data. Until that exists, prompts remain outside VaultCompute's protection claim.

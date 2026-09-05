@@ -1,0 +1,70 @@
+# VaultCompute configuration example.
+# Copy to vaultcompute.yaml next to your entry point.
+
+schemas:
+  hr_api.get_salary:
+    sensitive_fields:
+      - path: $.salary
+        semantic_type: salary
+        unit: EUR/year
+        # Paths are required by VaultComputeSession unless explicitly disabled.
+        # required: false
+
+  # A list the model gets as ONE token, however long it is. The declared
+  # columns are what it may query on with vault_table — declare a column
+  # you want filtered or sorted even when it is not itself sensitive.
+  # hr_api.list_employees:
+  #   tables:
+  #     - path: $.employees
+  #       # required: false  # only if successful responses may omit the table
+  #       columns:
+  #         - name: salary
+  #           semantic_type: salary
+  #           unit: EUR/year
+  #         - name: dept
+
+# MCP resources carry data too, and are keyed by URI rather than by name.
+# resources:
+#   "file:///hr/*.json":
+#     sensitive_fields:
+#       - path: $.salary
+#         semantic_type: salary
+#         unit: EUR/year
+
+tokens:
+  default_ttl: 3600
+
+compute:
+  # controlled (default): expose only vault_table for declared tables.
+  # disabled: expose no data-operation tools.
+  # python_unsafe: also expose arbitrary model-written Python. This assumes a
+  # cooperative model and is never selected implicitly.
+  mode: controlled
+
+  # Defense in depth for python_unsafe. The limit is shared by a root secret and
+  # every token derived from it; successes, failures and timeouts all count.
+  # Reservations are atomic in SQLite and blocked bursts appear in audit. This
+  # slows the oracle but cannot stop a patient model across windows. 0 disables
+  # refusal while retaining attempt logging.
+  max_calls_per_token: 8
+  rate_window_s: 60
+
+proxy:
+  # Reject JSON-RPC batches, non-JSON protected output, unsupported content
+  # parts, and declared paths that no longer match. false restores compatibility
+  # passthrough and is not a complete privacy boundary.
+  strict: true
+
+storage:
+  # memory (default) loses everything when the process ends. Choose sqlite when
+  # the vault must outlive a restart, or when tokenizing and rehydrating happen
+  # in different processes. Without encrypt_at_rest below, the file holds
+  # cleartext values: protect it with filesystem permissions.
+  backend: memory
+  # path: ./vault.db
+
+  # Seals values with AES-256-GCM. sqlite only. The key comes from
+  # VAULTCOMPUTE_VAULT_KEY (32 bytes, base64) and never from this file — a key
+  # kept beside the database it protects is decoration. Needs the optional
+  # extra: pip install vaultcompute[encryption]
+  # encrypt_at_rest: false

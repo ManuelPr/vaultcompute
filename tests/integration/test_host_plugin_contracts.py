@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from blindfold import hooks
-from blindfold.hosts import CLAUDE_CODE, CODEX
+from vaultcompute import hooks
+from vaultcompute.hosts import CLAUDE_CODE, CODEX
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -28,8 +28,8 @@ def test_claude_plugin_declares_every_supported_event():
         "PostToolUse",
         "MessageDisplay",
     }
-    assert commands["PreToolUse"] == [f"blindfold hook {hooks.PRE_TOOL_USE}"]
-    assert commands["PostToolUse"] == [f"blindfold hook {hooks.POST_TOOL_USE}"]
+    assert commands["PreToolUse"] == [f"vaultcompute hook {hooks.PRE_TOOL_USE}"]
+    assert commands["PostToolUse"] == [f"vaultcompute hook {hooks.POST_TOOL_USE}"]
     assert hooks.events_for(CLAUDE_CODE) == (
         hooks.PRE_TOOL_USE,
         hooks.POST_TOOL_USE,
@@ -39,7 +39,7 @@ def test_claude_plugin_declares_every_supported_event():
 
 
 def test_codex_plugin_declares_only_supported_events_and_selects_its_adapter():
-    commands = _commands(ROOT / "plugins" / "blindfold-codex" / "hooks" / "hooks.json")
+    commands = _commands(ROOT / "plugins" / "vaultcompute-codex" / "hooks" / "hooks.json")
 
     assert set(commands) == {"SessionStart", "PreToolUse", "PostToolUse"}
     assert all(
@@ -54,17 +54,17 @@ def test_codex_plugin_declares_only_supported_events_and_selects_its_adapter():
     )
 
 
-def test_codex_plugin_exposes_blindfold_compute_server():
+def test_codex_plugin_exposes_vault_compute_server():
     manifest = json.loads(
         (
-            ROOT / "plugins" / "blindfold-codex" / ".codex-plugin" / "plugin.json"
+            ROOT / "plugins" / "vaultcompute-codex" / ".codex-plugin" / "plugin.json"
         ).read_text(encoding="utf-8")
     )
     mcp = json.loads(
-        (ROOT / "plugins" / "blindfold-codex" / ".mcp.json").read_text(encoding="utf-8")
+        (ROOT / "plugins" / "vaultcompute-codex" / ".mcp.json").read_text(encoding="utf-8")
     )
 
-    assert manifest["name"] == "blindfold-codex"
+    assert manifest["name"] == "vaultcompute-codex"
     assert manifest["mcpServers"] == "./.mcp.json"
-    assert mcp["mcpServers"]["blindfold"]["command"] == "blindfold"
-    assert mcp["mcpServers"]["blindfold"]["args"] == ["mcp-server"]
+    assert mcp["mcpServers"]["vaultcompute"]["command"] == "vaultcompute"
+    assert mcp["mcpServers"]["vaultcompute"]["args"] == ["mcp-server"]

@@ -2,8 +2,8 @@ from datetime import datetime, timedelta, timezone
 
 from freezegun import freeze_time
 
-from blindfold.core.lineage import Lineage, Policy, VaultRecord
-from blindfold.core.vault import MemoryTokenStore
+from vaultcompute.core.lineage import Lineage, Policy, VaultRecord
+from vaultcompute.core.vault import MemoryTokenStore
 
 NOW = datetime(2026, 7, 15, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -89,9 +89,9 @@ def test_invalidate_cascade_removes_descendants():
     store = MemoryTokenStore()
     a = _rec("⟦tok_00000001⟧")
     b = _rec("⟦tok_00000002⟧")
-    c = _rec("⟦tok_00000003⟧", inputs=("⟦tok_00000001⟧",), op="blind_compute")
-    d = _rec("⟦tok_00000004⟧", inputs=("⟦tok_00000003⟧",), op="blind_compute")
-    e = _rec("⟦tok_00000005⟧", inputs=("⟦tok_00000002⟧",), op="blind_compute")  # unrelated
+    c = _rec("⟦tok_00000003⟧", inputs=("⟦tok_00000001⟧",), op="vault_compute")
+    d = _rec("⟦tok_00000004⟧", inputs=("⟦tok_00000003⟧",), op="vault_compute")
+    e = _rec("⟦tok_00000005⟧", inputs=("⟦tok_00000002⟧",), op="vault_compute")  # unrelated
     for r in (a, b, c, d, e):
         store.put(r)
 

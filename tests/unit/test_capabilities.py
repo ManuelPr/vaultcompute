@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from blindfold.core.capabilities import TableQueryCapability
+from vaultcompute.core.capabilities import TableQueryCapability
 
 
 NOW = datetime.now(tz=timezone.utc)

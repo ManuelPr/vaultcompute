@@ -1,7 +1,7 @@
 """The audit command — the only way to tell a working install from no install.
 
 In Mode C the display hook puts real values back before anyone reads them, so
-the screen looks identical whether Blindfold ran or not. These tests are about
+the screen looks identical whether VaultCompute ran or not. These tests are about
 the one thing that can tell the difference: the transcript, cross-referenced
 against the vault.
 """
@@ -11,10 +11,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from blindfold.audit import MIN_INTERESTING, audit, read_transcript, session_ids_in
-from blindfold.core.lineage import Lineage, Policy, VaultRecord
-from blindfold.core.vault import MemoryTokenStore
-from blindfold.ports.token_store import TokenStore
+from vaultcompute.audit import MIN_INTERESTING, audit, read_transcript, session_ids_in
+from vaultcompute.core.lineage import Lineage, Policy, VaultRecord
+from vaultcompute.core.vault import MemoryTokenStore
+from vaultcompute.ports.token_store import TokenStore
 
 SESSION = "S1"
 
@@ -143,11 +143,11 @@ def test_audit_reports_compute_attempts_and_rate_limit_blocks():
     assert "SUSPICIOUS COMPUTE" in report.render()
 
 
-# --- blind_compute results that coincide with public text -----------------
+# --- vault_compute results that coincide with public text -----------------
 
 
 def _store_with_compute_result(value, *, session: str = SESSION):
-    """A record the way blindfold_compute actually mints it: op=blind_compute."""
+    """A record the way vault_compute actually mints it: op=vault_compute."""
     store = MemoryTokenStore()
     token = TokenStore.mint_token()
     store.put(
@@ -160,7 +160,7 @@ def _store_with_compute_result(value, *, session: str = SESSION):
             session_id=session,
             created_at=datetime.now(tz=timezone.utc),
             ttl=datetime.now(tz=timezone.utc) + timedelta(hours=1),
-            lineage=Lineage(op="blind_compute", inputs=("tok_a", "tok_b")),
+            lineage=Lineage(op="vault_compute", inputs=("tok_a", "tok_b")),
             policy=Policy(),
         )
     )
@@ -173,7 +173,7 @@ def test_a_literal_the_model_wrote_into_compute_code_is_not_a_leak():
     # the choice, not the name.
     store, token = _store_with_compute_result("Andrea Tuscano")
     transcript = (
-        '{"type":"tool_use","name":"blindfold_compute","input":'
+        '{"type":"tool_use","name":"vault_compute","input":'
         '{"code":"result = \'Andrea Tuscano\' if resolve(\'tok_a\') > resolve(\'tok_b\') '
         'else \'Manuel Pernigotto\'","inputs":["tok_a","tok_b"]}}'
         f' ...later the screen shows {token} resolved as Andrea Tuscano...'
@@ -190,7 +190,7 @@ def test_a_computed_number_never_typed_as_a_literal_is_still_a_leak():
     # never a literal in the code, so the carve-out must not swallow it.
     store, token = _store_with_compute_result(180000)
     transcript = (
-        '{"type":"tool_use","name":"blindfold_compute","input":'
+        '{"type":"tool_use","name":"vault_compute","input":'
         '{"code":"result = resolve(\'tok_a\') + resolve(\'tok_b\')","inputs":["tok_a","tok_b"]}}'
         ' the total came out to 180000 apparently'
     )

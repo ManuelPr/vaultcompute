@@ -13,10 +13,10 @@ import re
 
 import pytest
 
-from blindfold.config import BlindfoldConfig, ProxyConfig, SensitiveFieldConfig, ToolSchemaConfig
+from vaultcompute.config import VaultComputeConfig, ProxyConfig, SensitiveFieldConfig, ToolSchemaConfig
 TOKEN_RE = re.compile(r"⟦tok_[0-9a-f]{32}⟧")
 
-from blindfold.proxy import _pump_child_to_client, _pump_client_to_child, build_proxy_state
+from vaultcompute.proxy import _pump_child_to_client, _pump_client_to_child, build_proxy_state
 
 
 class _FakeStdin:
@@ -55,7 +55,7 @@ def _reader(lines: list[bytes]):
 
 @pytest.fixture
 def state():
-    return build_proxy_state(BlindfoldConfig())
+    return build_proxy_state(VaultComputeConfig())
 
 
 BATCH = json.dumps([{"jsonrpc": "2.0", "id": 900, "method": "tools/list", "params": {}}]).encode() + b"\n"
@@ -80,7 +80,7 @@ async def test_child_to_client_blocks_a_batch_in_strict_mode(state):
 
 
 async def test_batches_are_forwarded_only_when_permissive():
-    state = build_proxy_state(BlindfoldConfig(proxy=ProxyConfig(strict=False)))
+    state = build_proxy_state(VaultComputeConfig(proxy=ProxyConfig(strict=False)))
     child = _FakeChild()
     written = []
     await _pump_client_to_child(_reader([BATCH]), child, written.append, state)
@@ -102,7 +102,7 @@ async def test_a_normal_request_still_reaches_the_child(state):
 
 async def test_rehydrate_is_answered_locally_and_never_forwarded(state):
     line = json.dumps(
-        {"jsonrpc": "2.0", "id": 7, "method": "blindfold/rehydrate", "params": {"text": "hi"}}
+        {"jsonrpc": "2.0", "id": 7, "method": "vaultcompute/rehydrate", "params": {"text": "hi"}}
     ).encode() + b"\n"
     child = _FakeChild()
     written = []
@@ -128,7 +128,7 @@ async def test_malformed_json_from_the_child_is_blocked_in_strict_mode(state):
 # resources/* used to pass through untouched, so a server exposing salaries as
 # a resource rather than as a tool got no protection at all.
 
-RESOURCE_CONFIG = BlindfoldConfig(
+RESOURCE_CONFIG = VaultComputeConfig(
     resources={
         "file:///hr/*.json": ToolSchemaConfig(
             sensitive_fields=[SensitiveFieldConfig(path="$.salary", semantic_type="salary")]
@@ -236,7 +236,7 @@ async def _tokenized_text(state, payload: dict, tool: str = "get_salary") -> str
 @pytest.fixture
 def salary_state():
     return build_proxy_state(
-        BlindfoldConfig(
+        VaultComputeConfig(
             schemas={
                 "get_salary": ToolSchemaConfig(
                     sensitive_fields=[SensitiveFieldConfig(path="$.salary")]

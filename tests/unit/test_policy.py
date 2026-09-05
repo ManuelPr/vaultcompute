@@ -1,8 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
-from blindfold.core.lineage import Lineage, Policy, VaultRecord
-from blindfold.core.policy import SessionBoundPolicy
-from blindfold.ports.policy import DetokenizeContext
+from vaultcompute.core.lineage import Lineage, Policy, VaultRecord
+from vaultcompute.core.policy import SessionBoundPolicy
+from vaultcompute.ports.policy import DetokenizeContext
 
 NOW = datetime(2026, 7, 15, 12, 0, 0, tzinfo=timezone.utc)
 

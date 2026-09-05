@@ -2,7 +2,7 @@
 
 Two bugs, same root cause, found one after the other against a real host.
 
-`uv tool install .` on a stock Windows shell, then `blindfold hook
+`uv tool install .` on a stock Windows shell, then `vaultcompute hook
 session-start` with a config declaring any protected path, crashed with
 
     UnicodeEncodeError: 'charmap' codec can't encode character '⟦'
@@ -22,7 +22,7 @@ git history for the transcript.
 The token delimiters are U+27E6/U+27E7; Windows' default console codepage
 (cp1252) cannot represent them, and nothing sets PYTHONIOENCODING for a binary
 a host invokes by bare name — which is exactly how the plugin's hooks and MCP
-server run `blindfold`.
+server run `vaultcompute`.
 
 These tests use fakes rather than an actual cp1252 stream, so the check is
 deterministic on every platform CI runs on, including the Linux and macOS
@@ -32,7 +32,7 @@ runners where the bug cannot reproduce natively.
 import io
 import sys
 
-from blindfold import cli
+from vaultcompute import cli
 
 
 class _FakeStream:
@@ -116,7 +116,7 @@ def test_a_session_start_briefing_actually_contains_the_delimiter(tmp_path, monk
     # Ground truth for why this bug existed at all: confirm the character that
     # broke cp1252 is really in what SessionStart prints, on a config that has
     # something to protect.
-    cfg = tmp_path / "blindfold.yaml"
+    cfg = tmp_path / "vaultcompute.yaml"
     cfg.write_text(
         f"storage:\n  backend: sqlite\n  path: {tmp_path / 'vault.db'}\n"
         "schemas:\n  hr.get_salary:\n    sensitive_fields:\n      - path: $.salary\n",

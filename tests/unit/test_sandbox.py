@@ -2,9 +2,9 @@ import subprocess
 
 import pytest
 
-from blindfold.ports.sandbox import SandboxError
-from blindfold.sandbox import subprocess_ as subprocess_module
-from blindfold.sandbox.subprocess_ import SubprocessSandbox
+from vaultcompute.ports.sandbox import SandboxError
+from vaultcompute.sandbox import subprocess_ as subprocess_module
+from vaultcompute.sandbox.subprocess_ import SubprocessSandbox
 
 
 def test_happy_path_arithmetic():
@@ -212,7 +212,7 @@ def test_filesystem_is_no_longer_readable():
 
 
 def test_aggregation_over_hidden_values_still_works():
-    # The allow-list has to leave blind compute usable, or it is not a fix.
+    # The allow-list has to leave arbitrary Python compute usable, or it is not a fix.
     sb = SubprocessSandbox()
     salaries = [62000, 71000, 55000]
     result = sb.run(

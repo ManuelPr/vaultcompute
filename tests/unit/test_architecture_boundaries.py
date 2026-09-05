@@ -4,18 +4,18 @@ import ast
 from pathlib import Path
 
 
-CORE = Path(__file__).parents[2] / "src" / "blindfold" / "core"
+CORE = Path(__file__).parents[2] / "src" / "vaultcompute" / "core"
 BANNED = (
-    "blindfold.audit",
-    "blindfold.cli",
-    "blindfold.config",
-    "blindfold.hooks",
-    "blindfold.hosts",
-    "blindfold.mcp_server",
-    "blindfold.proxy",
-    "blindfold.sandbox",
-    "blindfold.session",
-    "blindfold.tools",
+    "vaultcompute.audit",
+    "vaultcompute.cli",
+    "vaultcompute.config",
+    "vaultcompute.hooks",
+    "vaultcompute.hosts",
+    "vaultcompute.mcp_server",
+    "vaultcompute.proxy",
+    "vaultcompute.sandbox",
+    "vaultcompute.session",
+    "vaultcompute.tools",
 )
 
 

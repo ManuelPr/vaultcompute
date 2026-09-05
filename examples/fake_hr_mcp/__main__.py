@@ -58,7 +58,7 @@ def _build_server() -> Server:
         if name != "get_salary":
             raise ValueError(f"unknown tool: {name}")
         person = arguments["name"]
-        live_canary = os.environ.get("BLINDFOLD_LIVE_CANARY")
+        live_canary = os.environ.get("VAULTCOMPUTE_LIVE_CANARY")
         salary = (
             int(live_canary) if live_canary is not None else _SALARIES.get(person, 0)
         )

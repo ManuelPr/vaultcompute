@@ -2,7 +2,7 @@
 
 This is deliberately not part of the ordinary test suite: it starts a real
 model turn and consumes the user's Claude allowance. It verifies the boundary
-the unit tests cannot: the installed host accepts Blindfold's replacement and
+the unit tests cannot: the installed host accepts VaultCompute's replacement and
 the raw canary is absent from Claude Code's persisted transcript.
 
 Run from the repository root after ``uv tool install . --force``:
@@ -22,8 +22,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from blindfold.audit import audit, read_transcript, session_ids_in
-from blindfold.config import build_token_store, load_config
+from vaultcompute.audit import audit, read_transcript, session_ids_in
+from vaultcompute.config import build_token_store, load_config
 
 CANARY = "918273645"
 
@@ -62,7 +62,7 @@ def _transcript_for(session_id: str) -> Path | None:
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run one paid Blindfold compatibility turn in Claude Code."
+        description="Run one paid VaultCompute compatibility turn in Claude Code."
     )
     parser.add_argument(
         "--expect-version",
@@ -74,13 +74,13 @@ def _arguments() -> argparse.Namespace:
 def main() -> int:
     args = _arguments()
     claude = shutil.which("claude")
-    blindfold = shutil.which("blindfold")
+    vaultcompute = shutil.which("vaultcompute")
     if claude is None:
         print("Claude Code is not installed.", file=sys.stderr)
         return 2
-    if blindfold is None:
+    if vaultcompute is None:
         print(
-            "`blindfold` is not on PATH; run `uv tool install . --force`.",
+            "`vaultcompute` is not on PATH; run `uv tool install . --force`.",
             file=sys.stderr,
         )
         return 2
@@ -118,9 +118,9 @@ def main() -> int:
         os.pathsep + existing_pythonpath if existing_pythonpath else ""
     )
 
-    with tempfile.TemporaryDirectory(prefix="blindfold-claude-live-") as raw_tmp:
+    with tempfile.TemporaryDirectory(prefix="vaultcompute-claude-live-") as raw_tmp:
         workdir = Path(raw_tmp)
-        config_path = workdir / "blindfold.yaml"
+        config_path = workdir / "vaultcompute.yaml"
         vault_path = workdir / "vault.db"
         config_path.write_text(
             "storage:\n"
@@ -142,7 +142,7 @@ def main() -> int:
                             "command": sys.executable,
                             "args": ["-m", "examples.fake_hr_mcp"],
                             "env": {
-                                "BLINDFOLD_LIVE_CANARY": CANARY,
+                                "VAULTCOMPUTE_LIVE_CANARY": CANARY,
                                 "PYTHONPATH": str(repo),
                             },
                         }

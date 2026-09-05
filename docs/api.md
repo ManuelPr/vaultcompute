@@ -1,16 +1,16 @@
 # Public Python API
 
-Blindfold `0.1.x` treats the names exported directly by `blindfold` as its
-supported Python API. Imports from `blindfold.core`, `blindfold.tools`,
-`blindfold.hosts` and `blindfold.ports` are advanced integration points and may
+VaultCompute `0.1.x` treats the names exported directly by `vaultcompute` as its
+supported Python API. Imports from `vaultcompute.core`, `vaultcompute.tools`,
+`vaultcompute.hosts` and `vaultcompute.ports` are advanced integration points and may
 change between minor releases.
 
 ## Recommended Mode B surface
 
-Create one `BlindfoldSession` for one conversation or user isolation boundary:
+Create one `VaultComputeSession` for one conversation or user isolation boundary:
 
 ```python
-from blindfold import BlindfoldSession, ProtectionError, TableQueryCapability
+from vaultcompute import VaultComputeSession, ProtectionError, TableQueryCapability
 ```
 
 The normal data path consists of:

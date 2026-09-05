@@ -1,0 +1,37 @@
+{
+  "description": "Tokenize configured tool results before Codex continues.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "vaultcompute hook session-start --host codex"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "vaultcompute hook pre-tool-use --host codex"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "vaultcompute hook post-tool-use --host codex"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,221 @@
+"""VaultCompute CLI entry point."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+from vaultcompute import audit as audit_mod
+from vaultcompute import hooks, mcp_server
+from vaultcompute.config import VaultComputeConfig, build_token_store, load_config
+from vaultcompute.core.policy import SessionBoundPolicy
+from vaultcompute.hosts import CLAUDE_CODE, HOSTS
+from vaultcompute.proxy import run_proxy
+
+USAGE = (
+    "vaultcompute [--config PATH] -- <downstream-mcp-command> [args...]\n"
+    "vaultcompute hook <event> [--host claude-code|codex] [--config PATH]\n"
+    "vaultcompute mcp-server [--config PATH]\n"
+    "vaultcompute audit <transcript> [--session ID] [--config PATH]\n\n"
+    "Wraps the given stdio MCP server, tokenizing declared JSON tool results\n"
+    "and exposing configured operation tools + vaultcompute/rehydrate. Strict\n"
+    "protocol handling is the default; arbitrary Python is opt-in.\n\n"
+    "`hook` reads one Claude Code or Codex hook event as JSON on stdin and writes the\n"
+    "hook response on stdout. `mcp-server` exposes the operation tools selected\n"
+    "by compute.mode. Both need a shared vault\n"
+    "(storage.backend: sqlite): they run as separate processes.\n\n"
+    "`audit` checks a transcript against the vault and reports whether any\n"
+    "hidden value reached the model — the question the screen cannot answer."
+)
+
+
+def _split_argv(argv: list[str]) -> tuple[list[str], list[str]]:
+    if "--" not in argv:
+        return argv, []
+    idx = argv.index("--")
+    return argv[:idx], argv[idx + 1 :]
+
+
+def main(argv: list[str] | None = None) -> int:
+    # Windows' default console/subprocess codepage cannot represent the token
+    # delimiters U+27E6/U+27E7, and nothing upstream sets PYTHONIOENCODING for
+    # a `uv tool install`-ed binary a host invokes as a bare command name —
+    # which is exactly how the plugin's hooks and MCP server run it. Every
+    # subcommand below reads or prints through text-mode stdio, so this forces
+    # UTF-8 once, here, rather than corrupting or crashing at the first
+    # placeholder touched. Harmless to the proxy's own JSON-RPC path, which
+    # reads and writes raw bytes via .buffer and never goes through this text
+    # layer at all.
+    #
+    # stdin needs the same treatment as stdout/stderr, and the failure mode is
+    # worse: reading a mis-decoded ⟦ doesn't raise, it silently produces a
+    # different character. `hook message-display` still parses as valid JSON
+    # and returns cleanly — TOKEN_PATTERN just never matches, so the hook
+    # answers "nothing to do" and the host displays the raw placeholder
+    # forever. Confirmed by running the exact same call with and without
+    # PYTHONIOENCODING set: identical event, one resolves the token, the other
+    # produces no output and no error.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure") and (stream.encoding or "").lower() != "utf-8":
+            stream.reconfigure(encoding="utf-8")
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    if argv and argv[0] == "hook":
+        return run_hook(argv[1:])
+
+    if argv and argv[0] == "mcp-server":
+        return run_mcp_server(argv[1:])
+
+    if argv and argv[0] == "audit":
+        return run_audit(argv[1:])
+
+    own, downstream = _split_argv(argv)
+    parser = argparse.ArgumentParser(
+        prog="vaultcompute",
+        description="Privacy proxy for stdio MCP servers.",
+        usage=USAGE,
+    )
+    parser.add_argument("--config", type=Path, default=None, help="Path to vaultcompute.yaml")
+    args = parser.parse_args(own)
+
+    if not downstream:
+        print("error: no downstream command after `--`", file=sys.stderr)
+        print(USAGE, file=sys.stderr)
+        return 2
+
+    asyncio.run(run_proxy(downstream, config_path=args.config))
+    return 0
+
+
+def run_hook(argv: list[str]) -> int:
+    """Handle one host lifecycle event.
+
+    Failure is asymmetric on purpose. Printing nothing tells the host to keep
+    what it had: for ``PostToolUse`` that is the untokenized tool result on its
+    way to the model, so anything going wrong there has to block instead. For
+    ``MessageDisplay`` the worst case is the user reading a placeholder, which
+    is a nuisance and not a disclosure, so that one stays quiet.
+    """
+    parser = argparse.ArgumentParser(prog="vaultcompute hook", usage=USAGE)
+    parser.add_argument("event")
+    parser.add_argument("--host", choices=list(HOSTS), default=CLAUDE_CODE)
+    parser.add_argument("--config", type=Path, default=Path("vaultcompute.yaml"))
+    args = parser.parse_args(argv)
+
+    if args.event not in hooks.events_for(args.host):
+        parser.error(
+            f"event {args.event!r} is not available for {args.host}; "
+            f"choose from {', '.join(hooks.events_for(args.host))}"
+        )
+
+    protects = args.event in (hooks.PRE_TOOL_USE, hooks.POST_TOOL_USE)
+
+    def fail(message: str) -> int:
+        print(f"[vaultcompute] {message}", file=sys.stderr)
+        if protects:
+            response = hooks.failure_response(args.host, args.event, message)
+            if response is not None:
+                print(json.dumps(response))
+        return 0
+
+    try:
+        config = load_config(args.config) if args.config.exists() else VaultComputeConfig()
+    except Exception as exc:  # a broken config must not silently disable protection
+        return fail(f"could not load {args.config}: {type(exc).__name__}")
+
+    if config.storage.backend == "memory":
+        return fail(
+            "hooks need storage.backend: sqlite — each hook run is a separate process, "
+            "and a memory vault would not survive between tokenizing and displaying"
+        )
+
+    try:
+        event = hooks.read_event(sys.stdin.read())
+    except Exception as exc:
+        return fail(f"unreadable hook input: {type(exc).__name__}")
+
+    store = build_token_store(config)
+    try:
+        response = hooks.dispatch(
+            args.event,
+            event,
+            config=config,
+            store=store,
+            policy=SessionBoundPolicy(),
+            host=args.host,
+        )
+    except Exception as exc:
+        # Only the exception type, never its message: the same reasoning as the
+        # compute sandbox, since a message can carry a value it touched.
+        return fail(f"{args.event} failed: {type(exc).__name__}")
+    finally:
+        close = getattr(store, "close", None)
+        if close is not None:
+            close()
+
+    if response is not None:
+        print(json.dumps(response, ensure_ascii=False))
+    return 0
+
+
+def run_mcp_server(argv: list[str]) -> int:
+    """Serve vault_compute over stdio MCP."""
+    parser = argparse.ArgumentParser(prog="vaultcompute mcp-server", usage=USAGE)
+    parser.add_argument("--config", type=Path, default=Path("vaultcompute.yaml"))
+    args = parser.parse_args(argv)
+
+    try:
+        mcp_server.run(args.config)
+    except mcp_server.SharedVaultRequired as exc:
+        print(f"[vaultcompute] {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def run_audit(argv: list[str]) -> int:
+    """Answer "is it actually working" from the transcript, not the screen.
+
+    Exits non-zero when a hidden value or blocked probing burst is found, so it
+    can gate a pipeline.
+    """
+    parser = argparse.ArgumentParser(prog="vaultcompute audit", usage=USAGE)
+    parser.add_argument("transcript", type=Path)
+    parser.add_argument("--session", default=None, help="defaults to the transcript's own")
+    parser.add_argument("--config", type=Path, default=Path("vaultcompute.yaml"))
+    args = parser.parse_args(argv)
+
+    if not args.transcript.exists():
+        print(f"[vaultcompute] no such transcript: {args.transcript}", file=sys.stderr)
+        return 2
+
+    config = load_config(args.config) if args.config.exists() else VaultComputeConfig()
+    store = build_token_store(config)
+    try:
+        text = audit_mod.read_transcript(args.transcript)
+        sessions = [args.session] if args.session else audit_mod.session_ids_in(args.transcript)
+        if not sessions:
+            print(
+                "[vaultcompute] the transcript names no session; pass --session",
+                file=sys.stderr,
+            )
+            return 2
+        clean = True
+        for session in sessions:
+            if len(sessions) > 1:
+                print(f"\n--- session {session} ---")
+            report = audit_mod.audit(text, store, session)
+            print(report.render())
+            clean = clean and report.passed
+    finally:
+        close = getattr(store, "close", None)
+        if close is not None:
+            close()
+    return 0 if clean else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

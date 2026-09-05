@@ -1,8 +1,8 @@
-# Blindfold
+# VaultCompute
 
-> A privacy layer for structured LLM tool results. On supported, declared paths Blindfold replaces private values with opaque tokens before the model receives them, and restores authorized values only at a caller-controlled last hop.
-
-*(Working name — subject to change.)*
+> **Private data. Usable reasoning.**
+>
+> A privacy layer for structured LLM tool results. On supported, declared paths VaultCompute replaces private values with opaque tokens before the model receives them, and restores authorized values only at a caller-controlled last hop.
 
 **Status:** pre-alpha. The MVP is built and covered by tests; everything beyond it is design, not code.
 
@@ -28,21 +28,21 @@ Feedback and contributions welcome — see [Contributing](#contributing).
 
 When you connect an LLM (Claude, GPT, Gemini…) to your internal APIs via tool calling or MCP, every tool result flows back into the model's context. Ask an agent *"What is Andrea's salary?"* and the HR API's response — the actual salary — is sent to the LLM provider as part of the conversation.
 
-Existing PII-redaction proxies (Presidio, Philter, LLM Guard, …) solve a different problem: they scrub the **user's prompt** before it reaches the model. But in agentic setups the sensitive data usually isn't in the prompt — it's in the **tool results** coming back from your private APIs. That gap is what Blindfold covers.
+Existing PII-redaction proxies (Presidio, Philter, LLM Guard, …) solve a different problem: they scrub the **user's prompt** before it reaches the model. But in agentic setups the sensitive data usually isn't in the prompt — it's in the **tool results** coming back from your private APIs. That gap is what VaultCompute covers.
 
 ## What it does
 
-Blindfold sits between your agent harness and your APIs (or MCP servers). It:
+VaultCompute sits between your agent harness and your APIs (or MCP servers). It:
 
 1. **Tokenizes tool results.** Sensitive fields — declared per-tool in a schema — are replaced with typed anonymous tokens before the result reaches the LLM. The real values stay in a local vault — in memory by default, or in a SQLite file when the vault has to survive a restart or be shared between processes. That file holds cleartext unless you set `encrypt_at_rest` and supply a key from outside it.
 2. **Tells the LLM what the tokens mean, not what they are.** Each protected tool's description gains one line per declared path — `$.salary — salary, EUR/year` — so the model knows what it is manipulating even when the upstream API names its fields `f_42`. Sent once, with the tool definitions; never per token, never the value.
-3. **Enables controlled operations.** The default `controlled` profile exposes `blindfold_table`, a fixed operation set over a hidden list. Arbitrary model-written Python is available only through the explicit `python_unsafe` cooperative-model profile. Its system instruction forbids probing, while an atomic lineage-wide rate limit counts successful, failed and timed-out attempts; those controls slow abuse but do not make arbitrary Python safe against a malicious or prompt-injected model.
+3. **Enables controlled operations.** The default `controlled` profile exposes `vault_table`, a fixed operation set over a hidden list. Arbitrary model-written Python is available only through the explicit `python_unsafe` cooperative-model profile. Its system instruction forbids probing, while an atomic lineage-wide rate limit counts successful, failed and timed-out attempts; those controls slow abuse but do not make arbitrary Python safe against a malicious or prompt-injected model.
 4. **Rehydrates at the last hop.** Tokens in the model's answer are replaced with real values only when the response is delivered to the end user — after a pluggable authorization check. **This step is yours to call.** It happens in your application code, on the answer the model produced; a third-party MCP client will not do it for you (see [Quick start](#quick-start) and [`LIMITATIONS.md`](LIMITATIONS.md#rehydration-requires-a-client-you-control)).
-5. **Provides a diagnostic audit.** `blindfold audit <transcript>` cross-references exact vault values against a conversation and reports secret-compute outcomes or rate-limit blocks. It can confirm expected placeholders and catch direct cleartext matches; it is not proof of non-disclosure because undeclared, transformed, inferred and very short values can evade it.
+5. **Provides a diagnostic audit.** `vaultcompute audit <transcript>` cross-references exact vault values against a conversation and reports secret-compute outcomes or rate-limit blocks. It can confirm expected placeholders and catch direct cleartext matches; it is not proof of non-disclosure because undeclared, transformed, inferred and very short values can evade it.
 
 ```
 ┌────────────┐   answer with real values    ┌─────────────────────┐
-│  Frontend  │◄─────────────────────────────│  Blindfold           │
+│  Frontend  │◄─────────────────────────────│  VaultCompute           │
 └────────────┘                              │  ┌───────────────┐  │
       │                                     │  │ token vault   │  │
       ▼ prompt                              │  │ (memory or    │  │
@@ -62,12 +62,12 @@ Blindfold sits between your agent harness and your APIs (or MCP servers). It:
 
 **User:** *"Who earns more, Manuel Pernigotto or Andrea Tuscano?"*
 
-1. The LLM calls `hr_api.get_salary` twice. Blindfold intercepts both results and returns `{"name": "Manuel Pernigotto", "salary": "⟦tok_7f3a⟧"}` and the same shape for Andrea. The model already knows from the tool's description that `$.salary` is a salary in EUR/year and that it cannot read it.
-2. The LLM cannot compare what it cannot see — so it submits a blind-compute request:
+1. The LLM calls `hr_api.get_salary` twice. VaultCompute intercepts both results and returns `{"name": "Manuel Pernigotto", "salary": "⟦tok_7f3a⟧"}` and the same shape for Andrea. The model already knows from the tool's description that `$.salary` is a salary in EUR/year and that it cannot read it.
+2. The LLM cannot compare what it cannot see — so it submits a `vault_compute` request:
    ```python
    result = "Manuel Pernigotto" if resolve("⟦tok_2d81⟧") > resolve("⟦tok_7f3a⟧") else "Andrea Tuscano"
    ```
-3. Blindfold executes it in a sandbox on the real values and returns a **new token** — `⟦tok_9c1b⟧`, and nothing else. The vault keeps what the model doesn't get: the value, its dtype, and the lineage back to `tok_7f3a` and `tok_2d81` through this exact code.
+3. VaultCompute executes it in a sandbox on the real values and returns a **new token** — `⟦tok_9c1b⟧`, and nothing else. The vault keeps what the model doesn't get: the value, its dtype, and the lineage back to `tok_7f3a` and `tok_2d81` through this exact code.
 4. The LLM answers: *"The higher earner is ⟦tok_9c1b⟧."*
 5. Your application calls `rehydrate()` before showing the answer: *"The higher earner is Manuel Pernigotto."* (Step 5 is the one an MCP client you did not write will skip — it would show the placeholder.)
 
@@ -85,7 +85,7 @@ Every vault entry is a full record, not a bare key-value pair:
   "value": "<held in the vault, never serialized toward the LLM>",
   "dtype": "string",
   "semantic_type": null,
-  "lineage": { "op": "blind_compute", "inputs": ["tok_7f3a", "tok_2d81"], "code_digest": "sha256:…" },
+  "lineage": { "op": "vault_compute", "inputs": ["tok_7f3a", "tok_2d81"], "code_digest": "sha256:…" },
   "session_id": "sess_01",
   "ttl": "2026-07-15T11:32:00Z",
   "policy": { "reveal_to_frontend": true, "can_be_input_to_compute": true }
@@ -94,9 +94,9 @@ Every vault entry is a full record, not a bare key-value pair:
 
 The lineage DAG buys three things most redaction tools don't have:
 
-- **Audit** — every derived value can show which inputs and code produced it. `blindfold audit <transcript>` is a diagnostic for placeholders and exact cleartext matches; it is not a proof of non-disclosure.
+- **Audit** — every derived value can show which inputs and code produced it. `vaultcompute audit <transcript>` is a diagnostic for placeholders and exact cleartext matches; it is not a proof of non-disclosure.
 - **Cascading invalidation** — expire or delete a token and all its descendants go with it. Implemented as `invalidate_cascade`, but nothing in the runtime calls it yet: today it is an API for your code, not an automatic behavior.
-- **Policy inheritance** — a derived token inherits the *most restrictive* policy of its inputs, so sensitive data can't be laundered through a computation. This one is wired: `compose_policy` and `compose_ttl` run on every blind compute.
+- **Policy inheritance** — a derived token inherits the *most restrictive* policy of its inputs, so sensitive data can't be laundered through a computation. This one is wired: `compose_policy` and `compose_ttl` run on every derived computation.
 
 ### Collective tokens for structured data
 
@@ -117,7 +117,7 @@ was that the model could not operate on the result at all: a few hundred
 unordered opaque strings carry no structure, so it cannot sort them or even
 tell they are comparable quantities.
 
-It queries the token with `blindfold_table`, using a fixed set of operations
+It queries the token with `vault_table`, using a fixed set of operations
 rather than code — `filter`, `sort_by`, `limit`, `select`, `sum`, `mean`,
 `min`, `max`, `count` — and gets another token back:
 
@@ -133,7 +133,7 @@ bit per call; a fixed operation set cannot express it. So this path executes no
 model-written code and **needs no sandbox at all**.
 
 Table tokens and every value derived from them are policy-marked as ineligible
-for `blindfold_compute`. This prevents a model from creating a fresh count token
+for `vault_compute`. This prevents a model from creating a fresh count token
 for each threshold and feeding those tokens to Python as a success/failure
 oracle. A Mode B application can additionally require a trusted-side
 `TableQueryCapability` that binds one exact table, session, operation list and
@@ -141,7 +141,7 @@ expiry to the user's authorized request.
 
 ### Schema-driven tokenization
 
-Blindfold does **not** guess what's sensitive with NER or regexes over tool results. You declare it, per tool, per field:
+VaultCompute does **not** guess what's sensitive with NER or regexes over tool results. You declare it, per tool, per field:
 
 ```yaml
 schemas:
@@ -164,15 +164,15 @@ Tokens use distinctive delimiters and 128 random bits (`⟦tok_…⟧`). `rehydr
 
 Rehydration is a function your application calls on the final answer, not something that happens on the wire. Two consequences worth knowing before you design around it:
 
-- The model has to preserve the placeholders verbatim for this to work. `from blindfold import PLACEHOLDER_PROMPT` and put it in your system prompt — both demos do exactly that, while the Claude Code and Codex plugins carry the same text inside their `SessionStart` briefing.
+- The model has to preserve the placeholders verbatim for this to work. `from vaultcompute import PLACEHOLDER_PROMPT` and put it in your system prompt — both demos do exactly that, while the Claude Code and Codex plugins carry the same text inside their `SessionStart` briefing.
 - If the model's answer never passes through your code, nothing rehydrates it. That is the situation with any MCP client you did not write — see [`LIMITATIONS.md`](LIMITATIONS.md#rehydration-requires-a-client-you-control).
 
 ## Quick start
 
-Blindfold is a Python package, not yet published to PyPI. Install it from source:
+VaultCompute is a Python package, not yet published to PyPI. Install it from source:
 
 ```bash
-git clone https://github.com/ManuelPr/blindfold && cd blindfold
+git clone https://github.com/ManuelPr/vaultcompute && cd vaultcompute
 uv sync            # or:  pip install -e .
 ```
 
@@ -181,8 +181,8 @@ There are four ways to use it. **Inside Claude Code, pick Mode C. Inside Codex, 
 **Mode A — a CLI wrapping another stdio MCP server:**
 
 ```bash
-# Wrap any stdio MCP server; blindfold reads ./blindfold.yaml if present:
-blindfold --config blindfold.yaml -- python -m your_org.some_mcp_server
+# Wrap any stdio MCP server; vaultcompute reads ./vaultcompute.yaml if present:
+vaultcompute --config vaultcompute.yaml -- python -m your_org.some_mcp_server
 ```
 
 In its default strict profile this protects declared fields in supported JSON
@@ -199,15 +199,15 @@ answer: with a client you did not write, the user sees placeholders. See
 claude --plugin-dir ./plugin        # from a clone; see plugin/README.md
 ```
 
-Four hooks and one small MCP server, because a host gives Blindfold different
+Four hooks and one small MCP server, because a host gives VaultCompute different
 seams than a protocol does:
 
 | Piece | Does what |
 |---|---|
 | `SessionStart` hook → `additionalContext` | tells the model, once before the first prompt, which paths come back as placeholders and what they mean — and to reproduce them verbatim |
-| `PreToolUse` hook | refuses a configured built-in before execution when Blindfold has no tested adapter for its result shape |
+| `PreToolUse` hook | refuses a configured built-in before execution when VaultCompute has no tested adapter for its result shape |
 | `PostToolUse` hook → `updatedToolOutput` | rewrites the result **the model receives**, preserving the shape expected by Claude Code; audited today for one-part JSON MCP results and JSON in `Bash`/`PowerShell` standard output |
-| `mcp-server` (`blindfold mcp-server`) | offers the operations selected by `compute.mode`; arbitrary Python is absent by default |
+| `mcp-server` (`vaultcompute mcp-server`) | offers the operations selected by `compute.mode`; arbitrary Python is absent by default |
 | `MessageDisplay` hook → `displayContent` | rewrites **what the screen shows**, leaving the transcript untouched — rehydration |
 
 The last one solves the problem Mode A cannot. Because `MessageDisplay` is
@@ -218,7 +218,7 @@ turn. The proxy has no way to make that distinction.
 The first and third exist because a host's hooks **cannot add a tool or edit a
 tool description**. Mode A does both by rewriting the `tools/list` response as
 it passes the proxy; here the same information has to arrive as session context,
-and blind compute has to arrive the way every other tool does.
+and the protected operation tools have to arrive the way every other tool does.
 
 This mode **requires `storage.backend: sqlite`**: every hook invocation is a
 separate process, so the vault has to be shared. The CLI refuses to run the
@@ -234,11 +234,11 @@ original. Undeclared tools remain untouched.
 **Mode D — a Codex plugin:**
 
 ```bash
-# plugin source: ./plugins/blindfold-codex
+# plugin source: ./plugins/vaultcompute-codex
 ```
 
 Codex can run a hook after supported local tools and replace their result with
-Blindfold's tokenized JSON. This covers shell commands, local execution, file
+VaultCompute's tokenized JSON. This covers shell commands, local execution, file
 patches, MCP tools, and most local function tools. It does not cover hosted
 tools such as web search, and some specialized paths may opt out.
 
@@ -246,16 +246,16 @@ There is one deliberate difference from Claude Code: Codex currently exposes
 no display-only hook that can put real values on screen without also returning
 them to the conversation. Therefore the model and the user both see
 `⟦tok_…⟧`. The protection is useful when opaque output is acceptable; it is not
-feature parity with Mode C. See [`plugins/blindfold-codex/`](plugins/blindfold-codex/)
+feature parity with Mode C. See [`plugins/vaultcompute-codex/`](plugins/vaultcompute-codex/)
 and the exact host matrix in [`docs/host-adapters.md`](docs/host-adapters.md).
 
 **Mode B — an in-process library (used by a harness you write):**
 
 ```python
-from blindfold import BlindfoldSession
-from blindfold.config import load_config
+from vaultcompute import VaultComputeSession
+from vaultcompute.config import load_config
 
-session = BlindfoldSession(load_config("blindfold.yaml"), session_id=session_id)
+session = VaultComputeSession(load_config("vaultcompute.yaml"), session_id=session_id)
 system_prompt += "\n\n" + session.model_instructions
 protected = session.call_protected_tool("get_salary", get_salary, employee_id)
 # Async tools use: await session.call_protected_tool_async(...)
@@ -265,7 +265,7 @@ visible_answer = session.render_final_answer(llm_answer)
 
 Mode B is the reference integration: your code owns the tool result, the
 authorization decision and the final answer, so the loop actually closes. It
-works with any LLM SDK and needs no MCP. `BlindfoldSession` fails closed for an
+works with any LLM SDK and needs no MCP. `VaultComputeSession` fails closed for an
 unknown tool, a missing required path, or a declared table with the wrong
 shape. Mark a genuinely optional path with `required: false`.
 
@@ -274,7 +274,7 @@ require an exact match when executing the model's proposed query:
 
 ```python
 from datetime import datetime, timedelta, timezone
-from blindfold import TableQueryCapability
+from vaultcompute import TableQueryCapability
 
 ops = [{"op": "filter", "column": "salary", "cmp": ">", "value": 70000}]
 capability = TableQueryCapability.issue(
@@ -298,7 +298,7 @@ that explicitly enable or call the `python_unsafe` surface. See
 [`examples/demo_chat.py`](examples/demo_chat.py) for a deliberately unsafe
 Anthropic SDK compute example.
 
-`BlindfoldSession.model_instructions` supplies the placeholder rules and schema
+`VaultComputeSession.model_instructions` supplies the placeholder rules and schema
 briefing. Integrations that need per-tool descriptions can still use
 `describe_schema()` and `describe_tables()`. The lower-level tokenizer,
 rehydrator and handlers remain available for advanced integrations.
@@ -327,11 +327,11 @@ tokens:
 storage:
   backend: memory           # memory (default) | sqlite
   path: ./vault.db          # sqlite only
-  encrypt_at_rest: false    # sqlite only; needs BLINDFOLD_VAULT_KEY
+  encrypt_at_rest: false    # sqlite only; needs VAULTCOMPUTE_VAULT_KEY
 
 compute:
   mode: controlled           # disabled | controlled | python_unsafe
-  max_calls_per_token: 8    # blindfold_compute calls on one token per window; 0 disables
+  max_calls_per_token: 8    # vault_compute calls on one token per window; 0 disables
   rate_window_s: 60         # window length in seconds
 
 proxy:
@@ -367,9 +367,9 @@ neither is true: it is faster and puts nothing on disk. Asking for a backend thi
 being ignored.
 
 `encrypt_at_rest: true` seals values with AES-256-GCM. The key comes from
-`BLINDFOLD_VAULT_KEY` (32 bytes, base64) and never from the config file, since a
+`VAULTCOMPUTE_VAULT_KEY` (32 bytes, base64) and never from the config file, since a
 key kept beside the database it protects is decoration. Install with
-`pip install blindfold[encryption]`, and generate a key with:
+`pip install vaultcompute[encryption]`, and generate a key with:
 
 ```bash
 python -c "import base64,os; print(base64.b64encode(os.urandom(32)).decode())"
@@ -385,7 +385,7 @@ exist and when.
 
 The block below is a design sketch, **not valid current configuration**.
 Unknown top-level sections are retained for forward compatibility, but typos or
-unimplemented keys inside a section Blindfold already understands are rejected
+unimplemented keys inside a section VaultCompute already understands are rejected
 rather than silently ignored. Nothing below changes runtime behavior today.
 
 ```yaml
@@ -415,7 +415,7 @@ Two built-in profiles are designed to cover the common cases — **`local`** (si
 
 ## Pluggable architecture
 
-The core is deliberately small: intercept → tokenize → track lineage → blind compute → rehydrate. Everything environment-dependent hides behind three interfaces.
+The core is deliberately small: intercept → tokenize → track lineage → controlled computation → rehydrate. Everything environment-dependent hides behind three interfaces.
 
 | Port | Contract | Ships today | Designed **[planned]** |
 |---|---|---|---|
@@ -435,17 +435,17 @@ Notes for adapter authors:
 
 **Local (personal agent)** — the only deployment that exists today. Everything runs on your machine. With the default memory vault nothing survives the process, which matters because the placeholders you already sent the model *do* survive — in your chat history, your logs, your app's database — so a restart would leave those conversations pointing at values that exist nowhere. Switch to `backend: sqlite` if that matters, and treat the file as the secret it holds.
 
-**Server (internal chatbot, multi-user) [planned]:** Blindfold and its vault would run **server-side, inside your network perimeter**, next to the APIs they wrap — never in the browser, never on the client. Rehydration as the last server-side hop before the response reaches the user's frontend, gated by the configured policy. Intended vault: Redis (native TTL) for tokens and encrypted values, plus Postgres for the lineage/audit log *without* the values. None of this is built; the per-user isolation it implies does not exist yet either.
+**Server (internal chatbot, multi-user) [planned]:** VaultCompute and its vault would run **server-side, inside your network perimeter**, next to the APIs they wrap — never in the browser, never on the client. Rehydration as the last server-side hop before the response reaches the user's frontend, gated by the configured policy. Intended vault: Redis (native TTL) for tokens and encrypted values, plus Postgres for the lineage/audit log *without* the values. None of this is built; the per-user isolation it implies does not exist yet either.
 
 ## Threat model & limitations
 
 Read this before deploying. Honesty here is a feature.
 
-**What Blindfold protects against:** the LLM provider (and the model itself) learning the values returned by your private APIs, including values derived from them through computation — **against a model that follows the protocol**. A model actively trying to extract the values has channels available to it today; they are listed below, and closing them is ongoing work, not a solved problem.
+**What VaultCompute protects against:** the LLM provider (and the model itself) learning the values returned by your private APIs, including values derived from them through computation — **against a model that follows the protocol**. A model actively trying to extract the values has channels available to it today; they are listed below, and closing them is ongoing work, not a solved problem.
 
 **What it does NOT protect against (non-goals):**
 
-- **Access control between your users and your APIs.** Blindfold forwards the caller's identity headers untouched and lets *your* APIs enforce their own ACLs. If your API answers salary queries to anyone holding a service token, Blindfold will faithfully tokenize data the caller should never have obtained. Enforcement belongs upstream; we just don't break it.
+- **Access control between your users and your APIs.** VaultCompute forwards the caller's identity headers untouched and lets *your* APIs enforce their own ACLs. If your API answers salary queries to anyone holding a service token, VaultCompute will faithfully tokenize data the caller should never have obtained. Enforcement belongs upstream; we just don't break it.
 - **Prompt-side leakage.** The user's question still goes to the provider. *"What is Andrea Tuscano's salary?"* reveals a name and an intent even if the answer is tokenized. Optional inbound prompt tokenization (NER-based) is planned, at a cost in answer quality.
 - **Inference leakage from planned stable tokens.** If the planned `consistency: stable` option is implemented, equality between occurrences will become visible to the provider. The current implementation always mints fresh tokens and does not read this planned key.
 - **A malicious or prompt-injected model when `compute.mode: python_unsafe` is enabled.** This optional profile deliberately assumes a cooperative model.
@@ -459,18 +459,18 @@ Read this before deploying. Honesty here is a feature.
   | Exception text was forwarded to the model — `raise ValueError(resolve(t))` returned the value in one call | **closed** | done: types only, with six regression tests |
   | `open()` and `import` gave the child's code the filesystem | **raised, not closed** | done: builtins are an allow-list, so the obvious routes are absent. Escaping through Python's object graph needs no builtins and remains possible |
   | Network reachable from compute code | **raised, not closed** — `import socket` now fails like any import. It was open on Linux/macOS; on Windows it failed only as a side effect of the stripped environment breaking socket initialization, an accident, not a defense | **properly only at OS level**: a container with networking off, or equivalent sandboxing |
-  | Success-vs-failure as a one-bit oracle — `result = 1/0 if resolve(t) > 50000 else 'ok'`, repeated, recovers an exact number in ~20 calls | **open, contained** | **no**, not while the model submits arbitrary Python — only a fixed set of operations (the table design above) removes it. `compute.max_calls_per_token`/`rate_window_s` (default: 8 attempts per 60s) reserve quota atomically against every original secret in the input lineage. Successes, failures and timeouts all count, and copying a value into a derived token does not reset the budget. Blocks are logged and surfaced by `blindfold audit`. A patient attacker can still continue across windows. |
+  | Success-vs-failure as a one-bit oracle — `result = 1/0 if resolve(t) > 50000 else 'ok'`, repeated, recovers an exact number in ~20 calls | **open, contained** | **no**, not while the model submits arbitrary Python — only a fixed set of operations (the table design above) removes it. `compute.max_calls_per_token`/`rate_window_s` (default: 8 attempts per 60s) reserve quota atomically against every original secret in the input lineage. Successes, failures and timeouts all count, and copying a value into a derived token does not reset the budget. Blocks are logged and surfaced by `vaultcompute audit`. A patient attacker can still continue across windows. |
 
-  Capabilities remain optional and address authorization and intent; they are not required for the lineage-aware confidentiality rate limit. A richer CaMeL-style data-flow layer could further reduce the broader prompt-injection risk. Until then: **do not run blind compute against data whose exposure you cannot tolerate, if the model's inputs come from sources you do not control.** Do not run with `sandbox: disabled` on real data at all.
-- **Quality-preserving magic.** If the model only sees `⟦tok⟧`, it cannot judge whether a salary is competitive or a diagnosis plausible. Blind compute covers *mechanical* operations (compare, aggregate, filter); *semantic* judgment on hidden values is fundamentally impossible. That's the deal.
+  Capabilities remain optional and address authorization and intent; they are not required for the lineage-aware confidentiality rate limit. A richer CaMeL-style data-flow layer could further reduce the broader prompt-injection risk. Until then: **do not run arbitrary Python compute against data whose exposure you cannot tolerate, if the model's inputs come from sources you do not control.** Do not run with `sandbox: disabled` on real data at all.
+- **Quality-preserving magic.** If the model only sees `⟦tok⟧`, it cannot judge whether a salary is competitive or a diagnosis plausible. Controlled computation covers *mechanical* operations (compare, aggregate, filter); *semantic* judgment on hidden values is fundamentally impossible. That's the deal.
 
-**Operational cautions:** rehydration is validated, but the model can still mangle placeholders — instruct it not to (`PLACEHOLDER_PROMPT`, exported from the package root) and expect the occasional `[unknown token]`. Vault compromise equals data compromise: values sit in cleartext in process memory (and on disk, unless `encrypt_at_rest` is on) today, so keep TTLs short and run Blindfold in the same trust zone as the APIs it protects. Use `blindfold audit <transcript>` after a real session to check what actually reached the model, rather than trusting the screen — a working install and no install at all look identical there.
+**Operational cautions:** rehydration is validated, but the model can still mangle placeholders — instruct it not to (`PLACEHOLDER_PROMPT`, exported from the package root) and expect the occasional `[unknown token]`. Vault compromise equals data compromise: values sit in cleartext in process memory (and on disk, unless `encrypt_at_rest` is on) today, so keep TTLs short and run VaultCompute in the same trust zone as the APIs it protects. Use `vaultcompute audit <transcript>` after a real session to check what actually reached the model, rather than trusting the screen — a working install and no install at all look identical there.
 
 ## Comparison
 
-| | Prompt PII redaction | Tool-result tokenization | Reversible (rehydration) | Blind compute on hidden data | Lineage / audit DAG | Self-hosted, open source |
+| | Prompt PII redaction | Tool-result tokenization | Reversible (rehydration) | Operations on hidden data | Lineage / audit DAG | Self-hosted, open source |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|
-| **Blindfold** | plannedⁱ | ✅ | ✅ⁱⁱⁱ | ✅ⁱᵛ | ✅ | ✅ |
+| **VaultCompute** | plannedⁱ | ✅ | ✅ⁱⁱⁱ | ✅ⁱᵛ | ✅ | ✅ |
 | Microsoft Presidio | ✅ | ❌ | partial | ❌ | ❌ | ✅ |
 | Philter | ✅ | ❌ | ✅ | ❌ | ❌ | partial |
 | LLM Guard | ✅ | ❌ | ✅ | ❌ | ❌ | ✅ |
@@ -478,7 +478,7 @@ Read this before deploying. Honesty here is a feature.
 | CaMeL (research) | n/a | n/aⁱⁱ | n/a | ✅ | ✅ (capabilities) | ✅ (research code) |
 
 ⁱ Optional inbound NER pass, on the roadmap.
-ⁱⁱ CaMeL targets prompt injection, not provider-side privacy; its P-LLM/interpreter split is the closest architectural relative of Blindfold's blind compute, and a direct inspiration.
+ⁱⁱ CaMeL targets prompt injection, not provider-side privacy; its P-LLM/interpreter split is the closest architectural relative of VaultCompute's controlled-computation layer, and a direct inspiration.
 ⁱⁱⁱ In your own application code. Not available through an MCP client you did not write — see [`LIMITATIONS.md`](LIMITATIONS.md#rehydration-requires-a-client-you-control).
 ⁱᵛ Mechanical operations on a handful of tokens. Does not scale to long result sets until collective tokens land, and the sandbox is not hardened against a hostile model — see [Threat model](#threat-model--limitations).
 
@@ -511,8 +511,8 @@ Ordered by what the current release most needs, not by ambition.
 - [x] **CI on Linux, macOS and Windows** — including the sandbox probes, so the documented behaviour is asserted per platform
 - [x] **Restricted builtins in the compute child** — the easy filesystem and network paths are gone without anyone installing Docker; not a boundary, a higher cost
 - [x] **Export the placeholder-preserving prompt fragment** as `PLACEHOLDER_PROMPT`, used by both demos and by the Mode C briefing
-- [x] **`blindfold audit` diagnostic** — cross-references a transcript against the vault for placeholders and exact cleartext matches; useful evidence, not proof of non-disclosure
-- [x] **Lineage-wide compute attempt quota** — atomic across threads and SQLite processes; successes, failures and timeouts share the original secrets' budget, derived tokens cannot reset it, and blocked bursts appear in `blindfold audit`
+- [x] **`vaultcompute audit` diagnostic** — cross-references a transcript against the vault for placeholders and exact cleartext matches; useful evidence, not proof of non-disclosure
+- [x] **Lineage-wide compute attempt quota** — atomic across threads and SQLite processes; successes, failures and timeouts share the original secrets' budget, derived tokens cannot reset it, and blocked bursts appear in `vaultcompute audit`
 - [x] **Fail-closed Mode B façade** — one session owns sync/async tool protection, policy, TTL, authorized table queries, model instructions and final rendering
 - [ ] Table joins, group-by and cross-table aggregation — the operations collective tokens do not have yet
 - [ ] Docker sandbox — the OS-level answer to network and filesystem, after the cheap in-process measures
@@ -531,17 +531,17 @@ Ordered by what the current release most needs, not by ambition.
 - **[`docs/api.md`](docs/api.md)** — the supported Python imports, the small Mode B surface, and its boundary contract.
 - **[`docs/host-adapters.md`](docs/host-adapters.md)** — exact Claude Code and Codex coverage, failure behavior, compatibility testing, and the evidence required before building a custom client.
 - **[`docs/architecture.md`](docs/architecture.md)** — how the code actually works. Component-by-component tour with a full end-to-end frame-by-frame example. Start here after this README.
-- **[`LIMITATIONS.md`](LIMITATIONS.md)** — what Blindfold does *not* do, split into by-design (permanent) and MVP (temporary), with a cost estimate on every closable gap. Read before deploying against real data.
-- **[`blindfold.example.yaml`](blindfold.example.yaml)** — a copy-paste-ready configuration example, containing exactly the keys the current release reads.
+- **[`LIMITATIONS.md`](LIMITATIONS.md)** — what VaultCompute does *not* do, split into by-design (permanent) and MVP (temporary), with a cost estimate on every closable gap. Read before deploying against real data.
+- **[`vaultcompute.example.yaml`](vaultcompute.example.yaml)** — a copy-paste-ready configuration example, containing exactly the keys the current release reads.
 - **[`examples/try_modes.py`](examples/try_modes.py)** — runs the proxy, library, and Claude Code flows against the fake HR server with no API key. Codex needs its real hook host, so its contract is covered by the test suite instead of this scripted demo.
-- **[`examples/demo_chat.py`](examples/demo_chat.py)** — a runnable Anthropic + Blindfold + fake HR MCP loop.
+- **[`examples/demo_chat.py`](examples/demo_chat.py)** — a runnable Anthropic + VaultCompute + fake HR MCP loop.
 
 ### Project history — frozen, not maintained
 
 These two record how the MVP was designed and built in July 2026. They are useful for understanding *why* decisions were made and are **not updated as the code changes** — where they disagree with the three documents above, the documents above are right. (Known example: both describe the JSONPath dialect as supporting single-level wildcards; the implementation handles nested ones.)
 
-- **[`docs/superpowers/specs/2026-07-15-blindfold-mvp-design.md`](docs/superpowers/specs/2026-07-15-blindfold-mvp-design.md)** — the formal MVP design doc: scope, architecture, data model, key flows, testing strategy.
-- **[`docs/superpowers/plans/2026-07-15-blindfold-mvp.md`](docs/superpowers/plans/2026-07-15-blindfold-mvp.md)** — the task-by-task implementation plan the MVP was built from. Long (3,200 lines); read it for the reasoning behind a specific file, not front to back.
+- **[`docs/superpowers/specs/2026-07-15-vaultcompute-mvp-design.md`](docs/superpowers/specs/2026-07-15-vaultcompute-mvp-design.md)** — the formal MVP design doc: scope, architecture, data model, key flows, testing strategy.
+- **[`docs/superpowers/plans/2026-07-15-vaultcompute-mvp.md`](docs/superpowers/plans/2026-07-15-vaultcompute-mvp.md)** — the task-by-task implementation plan the MVP was built from. Long (3,200 lines); read it for the reasoning behind a specific file, not front to back.
 
 ## Contributing
 

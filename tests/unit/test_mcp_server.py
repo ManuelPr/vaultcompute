@@ -1,4 +1,4 @@
-"""The one-tool MCP server that gives Mode C its blind compute.
+"""The MCP server that gives Mode C its protected operation tools.
 
 The case that matters is the whole loop: a hook mints tokens, the server
 computes on them, and the display hook reveals the result — three separate
@@ -9,17 +9,17 @@ import json
 
 import pytest
 
-from blindfold import hooks, mcp_server
-from blindfold.config import (
-    BlindfoldConfig,
+from vaultcompute import hooks, mcp_server
+from vaultcompute.config import (
+    VaultComputeConfig,
     ComputeConfig,
     SensitiveFieldConfig,
     StorageConfig,
     ToolSchemaConfig,
 )
-from blindfold.core.policy import SessionBoundPolicy
-from blindfold.core.sqlite_store import SQLiteTokenStore
-from blindfold.sandbox.subprocess_ import SubprocessSandbox
+from vaultcompute.core.policy import SessionBoundPolicy
+from vaultcompute.core.sqlite_store import SQLiteTokenStore
+from vaultcompute.sandbox.subprocess_ import SubprocessSandbox
 
 TOOL = "mcp__hr__get_salary"
 SESSION = "sess_abc123"
@@ -27,7 +27,7 @@ SESSION = "sess_abc123"
 
 @pytest.fixture
 def config():
-    return BlindfoldConfig(
+    return VaultComputeConfig(
         schemas={
             TOOL: ToolSchemaConfig(
                 sensitive_fields=[SensitiveFieldConfig(path="$.salary", semantic_type="salary")]
@@ -96,7 +96,7 @@ def test_arbitrary_python_requires_explicit_config_opt_in(store):
     with pytest.raises(ValueError, match="python_unsafe"):
         mcp_server.compute(
             {"code": "result = 1", "inputs": []},
-            config=BlindfoldConfig(),
+            config=VaultComputeConfig(),
             store=store,
             sandbox=SubprocessSandbox(),
             policy=SessionBoundPolicy(),
@@ -158,18 +158,18 @@ def test_a_failed_computation_does_not_return_a_value(store, config):
 
 def test_server_advertises_exactly_the_compute_tool(store, config):
     server = mcp_server.build_server(config, store)
-    assert server.name == "blindfold"
+    assert server.name == "vaultcompute"
 
 
 def test_memory_backend_is_refused(tmp_path):
-    cfg = tmp_path / "blindfold.yaml"
+    cfg = tmp_path / "vaultcompute.yaml"
     cfg.write_text("storage:\n  backend: memory\n", encoding="utf-8")
     with pytest.raises(mcp_server.SharedVaultRequired, match="sqlite"):
         mcp_server.load_runtime(cfg)
 
 
 def test_sqlite_backend_loads(tmp_path):
-    cfg = tmp_path / "blindfold.yaml"
+    cfg = tmp_path / "vaultcompute.yaml"
     cfg.write_text(
         f"storage:\n  backend: sqlite\n  path: {tmp_path / 'v.db'}\n", encoding="utf-8"
     )

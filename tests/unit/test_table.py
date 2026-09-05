@@ -9,8 +9,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from blindfold.config import (
-    BlindfoldConfig,
+from vaultcompute.config import (
+    VaultComputeConfig,
     ColumnConfig,
     SensitiveFieldConfig,
     TableConfig,
@@ -18,17 +18,17 @@ from blindfold.config import (
     load_config,
     table_schemas_for,
 )
-from blindfold.core.lineage import Column, TableSchema
-from blindfold.core.capabilities import TableQueryCapability
-from blindfold.core.policy import SessionBoundPolicy
-from blindfold.core.rehydrator import rehydrate
-from blindfold.core.sqlite_store import SQLiteTokenStore
-from blindfold.core.table import run_query
-from blindfold.core.tokenizer import describe_tables, tokenize_result
-from blindfold.core.vault import MemoryTokenStore
-from blindfold.sandbox.subprocess_ import SubprocessSandbox
-from blindfold.tools.blindfold_compute import handle_blindfold_compute
-from blindfold.tools.blindfold_table import handle_blindfold_table
+from vaultcompute.core.lineage import Column, TableSchema
+from vaultcompute.core.capabilities import TableQueryCapability
+from vaultcompute.core.policy import SessionBoundPolicy
+from vaultcompute.core.rehydrator import rehydrate
+from vaultcompute.core.sqlite_store import SQLiteTokenStore
+from vaultcompute.core.table import run_query
+from vaultcompute.core.tokenizer import describe_tables, tokenize_result
+from vaultcompute.core.vault import MemoryTokenStore
+from vaultcompute.sandbox.subprocess_ import SubprocessSandbox
+from vaultcompute.tools.vault_compute import handle_vault_compute
+from vaultcompute.tools.vault_table import handle_vault_table
 
 TTL = datetime.now(tz=timezone.utc) + timedelta(hours=1)
 SESSION = "s"
@@ -215,7 +215,7 @@ def _table_token(store):
 
 
 def _query(store, token, ops):
-    return handle_blindfold_table(
+    return handle_vault_table(
         {"table": token, "ops": ops},
         store=store,
         policy=SessionBoundPolicy(),
@@ -235,7 +235,7 @@ def test_a_table_token_cannot_bypass_the_query_language_through_python():
     store = MemoryTokenStore()
     token = _table_token(store)
     with pytest.raises(ValueError, match="policy denied"):
-        handle_blindfold_compute(
+        handle_vault_compute(
             {"code": f"result = resolve('{token}')", "inputs": [token]},
             store=store,
             policy=SessionBoundPolicy(),
@@ -256,7 +256,7 @@ def test_a_table_result_cannot_be_used_as_a_fresh_python_oracle_token():
         ],
     )
     with pytest.raises(ValueError, match="policy denied"):
-        handle_blindfold_compute(
+        handle_vault_compute(
             {"code": f"result = 1 / 0 if resolve('{count}') > 0 else 'ok'", "inputs": [count]},
             store=store,
             policy=SessionBoundPolicy(),
@@ -276,7 +276,7 @@ def test_mode_b_can_require_an_exact_trusted_side_capability():
         ops=ops,
         expires_at=datetime.now(tz=timezone.utc) + timedelta(minutes=5),
     )
-    result = handle_blindfold_table(
+    result = handle_vault_table(
         {"table": token, "ops": ops},
         store=store,
         policy=SessionBoundPolicy(),
@@ -289,7 +289,7 @@ def test_mode_b_can_require_an_exact_trusted_side_capability():
 
     changed = [{"op": "filter", "column": "salary", "cmp": ">", "value": 71000}]
     with pytest.raises(ValueError, match="not authorized"):
-        handle_blindfold_table(
+        handle_vault_table(
             {"table": token, "ops": changed},
             store=store,
             policy=SessionBoundPolicy(),
@@ -329,7 +329,7 @@ def test_another_session_cannot_query_the_table():
     store = MemoryTokenStore()
     token = _table_token(store)
     with pytest.raises(ValueError, match="policy denied"):
-        handle_blindfold_table(
+        handle_vault_table(
             {"table": token, "ops": [{"op": "count"}]},
             store=store,
             policy=SessionBoundPolicy(),
@@ -356,7 +356,7 @@ def test_the_derived_token_inherits_the_shortest_ttl():
 
 def test_describe_tables_names_the_columns_and_the_tool():
     note = describe_tables([("$.employees", SCHEMA)])
-    for expected in ("$.employees", "name", "salary", "EUR/year", "dept", "blindfold_table"):
+    for expected in ("$.employees", "name", "salary", "EUR/year", "dept", "vault_table"):
         assert expected in note
 
 
@@ -441,7 +441,7 @@ def test_a_table_token_keeps_its_schema_across_processes(tmp_path):
 
 
 def _write(tmp_path, body: str):
-    p = tmp_path / "blindfold.yaml"
+    p = tmp_path / "vaultcompute.yaml"
     p.write_text(body, encoding="utf-8")
     return p
 
@@ -449,9 +449,9 @@ def _write(tmp_path, body: str):
 def test_a_host_briefing_describes_tables_too():
     # A config declaring only tables used to produce no briefing at all, so in
     # a host the model got a collective token with nothing said about it.
-    from blindfold.config import describe_config
+    from vaultcompute.config import describe_config
 
-    cfg = BlindfoldConfig(
+    cfg = VaultComputeConfig(
         schemas={
             "hr.list": ToolSchemaConfig(
                 tables=[
@@ -468,6 +468,6 @@ def test_a_host_briefing_describes_tables_too():
     )
     brief = describe_config(cfg)
     assert brief is not None
-    for expected in ("hr.list", "$.employees", "blindfold_table", "salary", "EUR/year", "dept"):
+    for expected in ("hr.list", "$.employees", "vault_table", "salary", "EUR/year", "dept"):
         assert expected in brief
     assert "71000" not in brief

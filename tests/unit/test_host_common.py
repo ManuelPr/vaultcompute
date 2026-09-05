@@ -1,6 +1,6 @@
 import pytest
 
-from blindfold.hosts.common import ProtectionError, session_id
+from vaultcompute.hosts.common import ProtectionError, session_id
 
 
 def test_host_session_id_is_required():

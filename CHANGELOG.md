@@ -1,14 +1,18 @@
 # Changelog
 
-All notable changes to Blindfold are documented here.
+All notable changes to VaultCompute are documented here.
 
 ## 0.1.0 - 2026-09-04
 
 First public release candidate.
 
+The project was renamed from its unpublished working name to **VaultCompute**;
+the distribution, Python package, CLI, configuration file and operation tools
+now use the `vaultcompute` / `vault_*` naming consistently.
+
 ### Added
 
-- Fail-closed Mode B `BlindfoldSession` for synchronous and asynchronous tool
+- Fail-closed Mode B `VaultComputeSession` for synchronous and asynchronous tool
   protection, exact capability-authorized table queries, model instructions and
   final rendering.
 - Strict Mode A stdio MCP proxy for declared JSON tool results and resources.

@@ -3,7 +3,7 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "blindfold hook session-start" }
+          { "type": "command", "command": "vaultcompute hook session-start" }
         ]
       }
     ],
@@ -11,7 +11,7 @@
       {
         "matcher": "*",
         "hooks": [
-          { "type": "command", "command": "blindfold hook pre-tool-use" }
+          { "type": "command", "command": "vaultcompute hook pre-tool-use" }
         ]
       }
     ],
@@ -19,14 +19,14 @@
       {
         "matcher": "*",
         "hooks": [
-          { "type": "command", "command": "blindfold hook post-tool-use" }
+          { "type": "command", "command": "vaultcompute hook post-tool-use" }
         ]
       }
     ],
     "MessageDisplay": [
       {
         "hooks": [
-          { "type": "command", "command": "blindfold hook message-display" }
+          { "type": "command", "command": "vaultcompute hook message-display" }
         ]
       }
     ]

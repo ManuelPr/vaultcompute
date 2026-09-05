@@ -11,15 +11,15 @@ from typing import Any
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from blindfold import BlindfoldSession
-from blindfold.config import (
-    BlindfoldConfig,
+from vaultcompute import VaultComputeSession
+from vaultcompute.config import (
+    VaultComputeConfig,
     ComputeConfig,
     SensitiveFieldConfig,
     ToolSchemaConfig,
 )
-from blindfold.sandbox.subprocess_ import SubprocessSandbox
-from blindfold.tools.blindfold_compute import handle_blindfold_compute
+from vaultcompute.sandbox.subprocess_ import SubprocessSandbox
+from vaultcompute.tools.vault_compute import handle_vault_compute
 
 FIXTURE = Path(__file__).parent / "recorded_transcript.json"
 
@@ -28,7 +28,7 @@ async def test_demo_flow_end_to_end():
     transcript = json.loads(FIXTURE.read_text(encoding="utf-8"))
     sandbox = SubprocessSandbox()
     session_id = f"e2e_{uuid.uuid4().hex[:8]}"
-    config = BlindfoldConfig(
+    config = VaultComputeConfig(
         schemas={
             "get_salary": ToolSchemaConfig(
                 sensitive_fields=[
@@ -38,10 +38,10 @@ async def test_demo_flow_end_to_end():
         },
         compute=ComputeConfig(mode="python_unsafe"),
     )
-    blindfold = BlindfoldSession(config, session_id=session_id)
+    vaultcompute = VaultComputeSession(config, session_id=session_id)
 
     # Everything a real model would receive or produce; probed for leaks below.
-    llm_visible_stream = [blindfold.model_instructions, transcript["question"]]
+    llm_visible_stream = [vaultcompute.model_instructions, transcript["question"]]
     bindings: dict[str, Any] = {}
 
     server_params = StdioServerParameters(
@@ -59,7 +59,7 @@ async def test_demo_flow_end_to_end():
                         text = call.content[0].text if call.content else "{}"
                         return json.loads(text)
 
-                    protected = await blindfold.call_protected_tool_async(
+                    protected = await vaultcompute.call_protected_tool_async(
                         step["name"], invoke_tool
                     )
                     text = json.dumps(protected, ensure_ascii=False)
@@ -70,12 +70,12 @@ async def test_demo_flow_end_to_end():
                     inputs = [_deref(bindings, ref) for ref in step["inputs_from"]]
                     code = step["code_template"].format(*inputs)
                     llm_visible_stream.append(code)
-                    token = handle_blindfold_compute(
+                    token = handle_vault_compute(
                         {"code": code, "inputs": inputs},
-                        store=blindfold.store,
-                        policy=blindfold.policy,
+                        store=vaultcompute.store,
+                        policy=vaultcompute.policy,
                         sandbox=sandbox,
-                        session_id=blindfold.session_id,
+                        session_id=vaultcompute.session_id,
                         ttl_seconds=config.tokens.default_ttl,
                     )
                     llm_visible_stream.append(token)
@@ -84,7 +84,7 @@ async def test_demo_flow_end_to_end():
                 elif step["kind"] == "final_text":
                     text = step["template"].format(**bindings)
                     llm_visible_stream.append(text)
-                    rehydrated = blindfold.render_final_answer(text)
+                    rehydrated = vaultcompute.render_final_answer(text)
                     assert rehydrated == transcript["expected_final_text"]
 
     joined = "\n".join(llm_visible_stream)

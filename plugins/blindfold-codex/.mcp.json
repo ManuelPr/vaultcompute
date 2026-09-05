@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "blindfold": {
-      "command": "blindfold",
-      "args": ["mcp-server"]
-    }
-  }
-}
