@@ -90,6 +90,8 @@ def _mcp_replacement(
             return replacement
 
     if isinstance(response, dict):
+        if "structuredContent" in response:
+            raise ProtectionError("the MCP result contains unsupported structuredContent")
         content = response.get("content")
         if isinstance(content, list) and len(content) == 1:
             part = content[0]

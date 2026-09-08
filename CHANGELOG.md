@@ -2,6 +2,19 @@
 
 All notable changes to VaultCompute are documented here.
 
+## Unreleased
+
+### Security
+
+- Strict Mode A and Claude Code reject protected MCP responses containing
+  unsupported `structuredContent`, which previously remained in cleartext.
+- Resource schema merging preserves both full coverage and required-path
+  checks across overlapping globs, without nesting placeholders.
+- Resource `tables` declarations are rejected at config load until supported;
+  use `sensitive_fields` to hide a resource's array as an opaque value.
+- Hook vault initialization failures now emit the host's blocking response.
+- Schema overlap validation now includes intersecting wildcards and indices.
+
 ## 0.1.0 - 2026-09-04
 
 First public release candidate.

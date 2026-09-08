@@ -313,6 +313,8 @@ def _tokenize_tool_call_result(msg: dict, tool_name: str, state: ProxyState) -> 
     tables = table_schemas_for(state.config, tool_name)
     if not fields and not tables:
         return
+    if "structuredContent" in msg["result"]:
+        raise ProxyProtectionError("protected tool returned unsupported structuredContent")
     content = (msg.get("result") or {}).get("content") or []
     if not isinstance(content, list) or not content:
         raise ProxyProtectionError("protected tool returned no content")

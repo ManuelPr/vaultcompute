@@ -13,6 +13,7 @@ than being ignored into a config that says one thing and does another.
 from __future__ import annotations
 
 import fnmatch
+from dataclasses import replace
 from pathlib import Path
 
 import yaml
@@ -111,12 +112,16 @@ class ToolSchemaConfig(StrictConfigModel):
                         f"path {path!r} is declared twice; the second declaration "
                         f"would tokenize the first one's placeholder"
                     )
-                inner, outer = sorted((segments, other_segments), key=len)
-                if outer[: len(inner)] == inner:
+                if all(
+                    a == b
+                    or (a == "*" and isinstance(b, int))
+                    or (b == "*" and isinstance(a, int))
+                    for a, b in zip(segments, other_segments)
+                ):
                     raise ValueError(
-                        f"paths {other_path!r} and {path!r} overlap — one contains "
-                        f"the other, so tokenizing both would nest a placeholder inside a "
-                        f"hidden value. Declare the outer one only, or narrow them."
+                        f"paths {other_path!r} and {path!r} overlap — they can protect "
+                        f"the same value or a containing subtree. Declare the outer "
+                        f"one only, or narrow them."
                     )
             seen.append((path, segments))
         return self
@@ -193,6 +198,14 @@ class VaultComputeConfig(BaseModel):
     storage: StorageConfig = StorageConfig()
     compute: ComputeConfig = ComputeConfig()
     proxy: ProxyConfig = ProxyConfig()
+
+    @model_validator(mode="after")
+    def _reject_resource_tables(self) -> VaultComputeConfig:
+        if any(schema.tables for schema in self.resources.values()):
+            raise ValueError(
+                "tables are not supported in resources; declare sensitive_fields instead"
+            )
+        return self
 
 
 def load_config(path: Path | str) -> VaultComputeConfig:
@@ -317,29 +330,25 @@ def table_schemas_for(config: VaultComputeConfig, tool_name: str) -> list[tuple[
 def schema_fields_for_resource(config: VaultComputeConfig, uri: str) -> list[SchemaField]:
     """Protected paths for a resource URI, merged over every pattern it matches.
 
-    Patterns are globs, so more than one can match a URI, and two of them can
-    name the same path. That is the overlap ToolSchemaConfig refuses statically
-    — but here it depends on the URI, so it cannot be caught at load and has to
-    be resolved now. Later declarations covering ground an earlier one already
-    covers are dropped rather than allowed to tokenize each other's
-    placeholders.
+    Keep ancestor and descendant declarations: both contribute required-path
+    checks, and dropping an ancestor would expose its other children. The
+    tokenizer replaces outer values first and skips already-protected pointers.
+    Exact duplicate paths are combined with the stronger required flag.
     """
-    merged: list[SchemaField] = []
-    kept: list[list] = []
+    merged: dict[tuple[str | int, ...], SchemaField] = {}
     for pattern in sorted(config.resources):
         if not fnmatch.fnmatch(uri, pattern):
             continue
         for field in config.resources[pattern].sensitive_fields:
-            segments = path_segments(field.path)
-            if any(segments[: len(k)] == k or k[: len(segments)] == segments for k in kept):
+            segments = tuple(path_segments(field.path))
+            if segments in merged:
+                prior = merged[segments]
+                merged[segments] = replace(prior, required=prior.required or field.required)
                 continue
-            kept.append(segments)
-            merged.append(
-                SchemaField(
-                    path=field.path,
-                    semantic_type=field.semantic_type,
-                    unit=field.unit,
-                    required=field.required,
-                )
+            merged[segments] = SchemaField(
+                path=field.path,
+                semantic_type=field.semantic_type,
+                unit=field.unit,
+                required=field.required,
             )
-    return merged
+    return list(merged.values())

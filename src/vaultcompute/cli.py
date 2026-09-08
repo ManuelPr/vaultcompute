@@ -138,7 +138,10 @@ def run_hook(argv: list[str]) -> int:
     except Exception as exc:
         return fail(f"unreadable hook input: {type(exc).__name__}")
 
-    store = build_token_store(config)
+    try:
+        store = build_token_store(config)
+    except Exception as exc:
+        return fail(f"could not open vault: {type(exc).__name__}")
     try:
         response = hooks.dispatch(
             args.event,

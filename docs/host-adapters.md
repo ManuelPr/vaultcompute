@@ -39,7 +39,9 @@ being admitted.
 VaultCompute currently admits:
 
 - MCP results containing exactly one text part whose text is JSON. Both the
-  observed list form and the object-with-`content` form are accepted.
+  observed list form and the object-with-`content` form are accepted. Objects
+  containing `structuredContent` are refused: that parallel representation is
+  not covered by this text adapter. The strict Mode A proxy also refuses it.
 - `Bash` and `PowerShell` structured results when `stdout` is JSON and `stderr`
   is empty. The full object is copied and only `stdout` is replaced.
 - The older flat `tool_output` string observed in previous Claude Code events,

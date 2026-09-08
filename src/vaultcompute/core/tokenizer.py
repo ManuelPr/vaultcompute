@@ -125,8 +125,15 @@ def tokenize_result(
             )
             _set_by_pointer(result, pointer, token)
 
-    for field in fields:
+    # Resource globs may declare both a container and a child, or intersecting
+    # wildcards/indices. Protect outer values first; never tokenize a token.
+    protected_pointers: set[tuple[str | int, ...]] = set()
+    for field in sorted(fields, key=lambda f: len(path_segments(f.path))):
         for pointer, value in _resolve_paths(result, field.path):
+            key = tuple(pointer)
+            if key in protected_pointers:
+                continue
+            protected_pointers.add(key)
             token = TokenStore.mint_token()
             record = VaultRecord(
                 token=token,

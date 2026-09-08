@@ -1,552 +1,276 @@
 # VaultCompute
 
-> **Private data. Usable reasoning.**
->
-> A privacy layer for structured LLM tool results. On supported, declared paths VaultCompute replaces private values with opaque tokens before the model receives them, and restores authorized values only at a caller-controlled last hop.
+**Private data. Usable reasoning.**
 
-**Status:** pre-alpha. The MVP is built and covered by tests; everything beyond it is design, not code.
+VaultCompute is a Python privacy layer for structured LLM tool results. It
+replaces declared private values with opaque tokens before your application
+sends the result to a model. Real values remain in a local vault; your
+application restores authorized values only when displaying the final answer.
 
-| Surface | Status | Intended guarantee |
-|---|---|---|
-| Core + Mode B library | reference | the application owns both ingress and final egress |
-| Mode A MCP proxy | beta | strict protection of declared JSON results; no automatic final rehydration |
-| Mode C Claude Code | experimental | fail-closed adapter for explicitly supported host result shapes |
-| Mode D Codex | experimental guardrail | supported local hook paths only; placeholders remain visible |
+Use it when an agent needs to filter, sort or aggregate private records without
+putting those records in the model's context. Your application still owns tool
+access, user authorization and the conversation loop.
 
-This README describes both, so it marks which is which:
-
-- Unmarked prose describes **what ships today**.
-- **[planned]** marks something that is designed but not implemented. It is not in the package; do not rely on it.
-
-[`LIMITATIONS.md`](LIMITATIONS.md) is the authoritative inventory of the distance between the two. It separates *temporary implementation gaps* (someone can close them) from *structural limits* (no amount of work removes them). Read it before pointing this at real data.
-
-Feedback and contributions welcome — see [Contributing](#contributing).
-
----
-
-## The problem
-
-When you connect an LLM (Claude, GPT, Gemini…) to your internal APIs via tool calling or MCP, every tool result flows back into the model's context. Ask an agent *"What is Andrea's salary?"* and the HR API's response — the actual salary — is sent to the LLM provider as part of the conversation.
-
-Existing PII-redaction proxies (Presidio, Philter, LLM Guard, …) solve a different problem: they scrub the **user's prompt** before it reaches the model. But in agentic setups the sensitive data usually isn't in the prompt — it's in the **tool results** coming back from your private APIs. That gap is what VaultCompute covers.
-
-## What it does
-
-VaultCompute sits between your agent harness and your APIs (or MCP servers). It:
-
-1. **Tokenizes tool results.** Sensitive fields — declared per-tool in a schema — are replaced with typed anonymous tokens before the result reaches the LLM. The real values stay in a local vault — in memory by default, or in a SQLite file when the vault has to survive a restart or be shared between processes. That file holds cleartext unless you set `encrypt_at_rest` and supply a key from outside it.
-2. **Tells the LLM what the tokens mean, not what they are.** Each protected tool's description gains one line per declared path — `$.salary — salary, EUR/year` — so the model knows what it is manipulating even when the upstream API names its fields `f_42`. Sent once, with the tool definitions; never per token, never the value.
-3. **Enables controlled operations.** The default `controlled` profile exposes `vault_table`, a fixed operation set over a hidden list. Arbitrary model-written Python is available only through the explicit `python_unsafe` cooperative-model profile. Its system instruction forbids probing, while an atomic lineage-wide rate limit counts successful, failed and timed-out attempts; those controls slow abuse but do not make arbitrary Python safe against a malicious or prompt-injected model.
-4. **Rehydrates at the last hop.** Tokens in the model's answer are replaced with real values only when the response is delivered to the end user — after a pluggable authorization check. **This step is yours to call.** It happens in your application code, on the answer the model produced; a third-party MCP client will not do it for you (see [Quick start](#quick-start) and [`LIMITATIONS.md`](LIMITATIONS.md#rehydration-requires-a-client-you-control)).
-5. **Provides a diagnostic audit.** `vaultcompute audit <transcript>` cross-references exact vault values against a conversation and reports secret-compute outcomes or rate-limit blocks. It can confirm expected placeholders and catch direct cleartext matches; it is not proof of non-disclosure because undeclared, transformed, inferred and very short values can evade it.
-
-```
-┌────────────┐   answer with real values    ┌─────────────────────┐
-│  Frontend  │◄─────────────────────────────│  VaultCompute           │
-└────────────┘                              │  ┌───────────────┐  │
-      │                                     │  │ token vault   │  │
-      ▼ prompt                              │  │ (memory or    │  │
-┌────────────┐   tool call                  │  │  ephemeral,   │  │
-│  Harness   │────────────────────────────► │  │  lineage DAG) │  │
-│  + LLM     │◄─────────────────────────────│  └───────────────┘  │
-│  provider  │   result with ⟦tokens⟧       └──────────┬──────────┘
-└────────────┘                                         │ real values
-   sees tokens only                                    ▼
-                                              ┌─────────────────┐
-                                              │  Your private   │
-                                              │  APIs / MCP     │
-                                              └─────────────────┘
-```
-
-## Example
-
-**User:** *"Who earns more, Manuel Pernigotto or Andrea Tuscano?"*
-
-1. The LLM calls `hr_api.get_salary` twice. VaultCompute intercepts both results and returns `{"name": "Manuel Pernigotto", "salary": "⟦tok_7f3a⟧"}` and the same shape for Andrea. The model already knows from the tool's description that `$.salary` is a salary in EUR/year and that it cannot read it.
-2. The LLM cannot compare what it cannot see — so it submits a `vault_compute` request:
-   ```python
-   result = "Manuel Pernigotto" if resolve("⟦tok_2d81⟧") > resolve("⟦tok_7f3a⟧") else "Andrea Tuscano"
-   ```
-3. VaultCompute executes it in a sandbox on the real values and returns a **new token** — `⟦tok_9c1b⟧`, and nothing else. The vault keeps what the model doesn't get: the value, its dtype, and the lineage back to `tok_7f3a` and `tok_2d81` through this exact code.
-4. The LLM answers: *"The higher earner is ⟦tok_9c1b⟧."*
-5. Your application calls `rehydrate()` before showing the answer: *"The higher earner is Manuel Pernigotto."* (Step 5 is the one an MCP client you did not write will skip — it would show the placeholder.)
-
-The LLM provider saw two opaque tokens, a snippet of comparison code, and a third opaque token. It never learned a salary — and not even who earns more.
+**Status: pre-alpha.** The library, MCP proxy, token stores and host adapters
+are implemented. Host integrations are version-sensitive; test their supported
+result shapes before relying on them. See [limitations](LIMITATIONS.md).
 
 ## How it works
 
-### Typed tokens with lineage
+1. **Declare** sensitive fields or whole tables in a schema for each tool.
+2. **Protect** the result: store private values in memory or SQLite and replace
+   them with fresh, opaque placeholders containing 128 random bits.
+3. **Query** a hidden table with `vault_table`. Fixed operations return another
+   placeholder, with lineage and inherited restrictions.
+4. **Render** the final answer for the user after authorization. Keep the
+   rendered cleartext out of subsequent model requests.
 
-Every vault entry is a full record, not a bare key-value pair:
+For example, a salary tool's result becomes `{"employees": "⟦tok_…⟧"}`. The
+model can request a sort by salary and a limit of one row. It receives another
+token; only final rendering reveals the selected employee. The abbreviated
+placeholder here is illustrative; real placeholders must be copied verbatim.
 
-```json
-{
-  "token": "tok_9c1b",
-  "value": "<held in the vault, never serialized toward the LLM>",
-  "dtype": "string",
-  "semantic_type": null,
-  "lineage": { "op": "vault_compute", "inputs": ["tok_7f3a", "tok_2d81"], "code_digest": "sha256:…" },
-  "session_id": "sess_01",
-  "ttl": "2026-07-15T11:32:00Z",
-  "policy": { "reveal_to_frontend": true, "can_be_input_to_compute": true }
-}
-```
-
-The lineage DAG buys three things most redaction tools don't have:
-
-- **Audit** — every derived value can show which inputs and code produced it. `vaultcompute audit <transcript>` is a diagnostic for placeholders and exact cleartext matches; it is not a proof of non-disclosure.
-- **Cascading invalidation** — expire or delete a token and all its descendants go with it. Implemented as `invalidate_cascade`, but nothing in the runtime calls it yet: today it is an API for your code, not an automatic behavior.
-- **Policy inheritance** — a derived token inherits the *most restrictive* policy of its inputs, so sensitive data can't be laundered through a computation. This one is wired: `compose_policy` and `compose_ttl` run on every derived computation.
-
-### Collective tokens for structured data
-
-A list declared under `tables:` comes back as **one** token, whatever its
-length, and the model is told the column names and what they mean. On 500
-employees x 5 sensitive fields:
-
-```
-individual tokens : 2500
-collective token  : 1
-the model sees    : {"employees": "⟦tok_a58cbaf08d2f45058ba8493ca72e94cb⟧"}
-```
-
-The cost of not having this was never context size — current tokens are 38 characters
-and *replace* the values they hide, measured at +3% on that same response back
-when they were 14. It
-was that the model could not operate on the result at all: a few hundred
-unordered opaque strings carry no structure, so it cannot sort them or even
-tell they are comparable quantities.
-
-It queries the token with `vault_table`, using a fixed set of operations
-rather than code — `filter`, `sort_by`, `limit`, `select`, `sum`, `mean`,
-`min`, `max`, `count` — and gets another token back:
-
-```
-model  -> filter dept == Eng, sort by salary desc, limit 3, select name, salary
-result -> ⟦tok_dc708f103c704e9ba8af451b542c1762⟧
-user   -> [{"name": "p499", "salary": 48463}, …]
-```
-
-That restriction is the feature, not a compromise. Arbitrary Python lets a
-model write something whose *success* depends on a hidden value and read one
-bit per call; a fixed operation set cannot express it. So this path executes no
-model-written code and **needs no sandbox at all**.
-
-Table tokens and every value derived from them are policy-marked as ineligible
-for `vault_compute`. This prevents a model from creating a fresh count token
-for each threshold and feeding those tokens to Python as a success/failure
-oracle. A Mode B application can additionally require a trusted-side
-`TableQueryCapability` that binds one exact table, session, operation list and
-expiry to the user's authorized request.
-
-### Schema-driven tokenization
-
-VaultCompute does **not** guess what's sensitive with NER or regexes over tool results. You declare it, per tool, per field:
-
-```yaml
-schemas:
-  hr_api.get_salary:
-    sensitive_fields:
-      - path: $.salary
-        semantic_type: salary
-        unit: EUR/year
-```
-
-Deterministic, and zero false negatives on declared fields — which is also the catch: a sensitive field you did not declare passes through in cleartext. Declare defensively, including error and debug paths; a path that never matches costs nothing. (An optional NER pass over free-text fields is on the roadmap — see below.)
-
-Paths are checked when the config loads. A path that this dialect cannot honor — recursive descent, a filter, a slice — is refused at startup rather than reinterpreted into something else, because the failure mode that matters here is a config that looks like it protects a field and does not. A path that is well-formed but simply absent from a given response stays a silent no-op, so defensive declaration remains free.
-
-The declared `semantic_type` and `unit` are what the model is told about each path. The runtime data type is recorded in the vault but not surfaced, since the tool description is built from config before any response exists.
-
-### Robust rehydration
-
-Tokens use distinctive delimiters and 128 random bits (`⟦tok_…⟧`). `rehydrate()` validates every token in the model's answer against the vault: a token that doesn't resolve renders as `[unknown token]` (hallucinated or expired), one the policy refuses renders as `[redacted]`. Neither is silently dropped.
-
-Rehydration is a function your application calls on the final answer, not something that happens on the wire. Two consequences worth knowing before you design around it:
-
-- The model has to preserve the placeholders verbatim for this to work. `from vaultcompute import PLACEHOLDER_PROMPT` and put it in your system prompt — both demos do exactly that, while the Claude Code and Codex plugins carry the same text inside their `SessionStart` briefing.
-- If the model's answer never passes through your code, nothing rehydrates it. That is the situation with any MCP client you did not write — see [`LIMITATIONS.md`](LIMITATIONS.md#rehydration-requires-a-client-you-control).
+The default `controlled` profile supports `filter`, `sort_by`, `limit`,
+`select`, `sum`, `mean`, `min`, `max` and `count` over declared tables.
+It executes no model-written code. Arbitrary Python through `vault_compute`
+requires explicit `compute.mode: python_unsafe` opt-in and assumes a cooperative
+model; it is not a safe boundary against malicious code or prompt injection.
 
 ## Quick start
 
-VaultCompute is a Python package, not yet published to PyPI. Install it from source:
+Install from this repository with Python 3.11+ and `uv`:
 
 ```bash
-git clone https://github.com/ManuelPr/vaultcompute && cd vaultcompute
-uv sync            # or:  pip install -e .
+git clone https://github.com/ManuelPr/vaultcompute
+cd vaultcompute
+uv sync
 ```
 
-There are four ways to use it. **Inside Claude Code, pick Mode C. Inside Codex, Mode D protects supported local tool results but leaves placeholders visible. Everywhere else, pick Mode B unless you know why you want Mode A.**
+Alternatively, in your own Python environment, run `python -m pip install -e .`.
+The commands below use `uv run` to select the project's environment.
 
-**Mode A — a CLI wrapping another stdio MCP server:**
-
-```bash
-# Wrap any stdio MCP server; vaultcompute reads ./vaultcompute.yaml if present:
-vaultcompute --config vaultcompute.yaml -- python -m your_org.some_mcp_server
-```
-
-In its default strict profile this protects declared fields in supported JSON
-tool/resource results and blocks protocol shapes it cannot inspect: batches,
-non-JSON text, blobs, images, and declared paths that no longer match. Setting
-`proxy.strict: false` restores compatibility passthrough and explicitly gives
-up the complete-boundary claim. Mode A still cannot own the model's final
-answer: with a client you did not write, the user sees placeholders. See
-[`LIMITATIONS.md`](LIMITATIONS.md#rehydration-requires-a-client-you-control).
-
-**Mode C — a Claude Code plugin:**
-
-```bash
-claude --plugin-dir ./plugin        # from a clone; see plugin/README.md
-```
-
-Four hooks and one small MCP server, because a host gives VaultCompute different
-seams than a protocol does:
-
-| Piece | Does what |
-|---|---|
-| `SessionStart` hook → `additionalContext` | tells the model, once before the first prompt, which paths come back as placeholders and what they mean — and to reproduce them verbatim |
-| `PreToolUse` hook | refuses a configured built-in before execution when VaultCompute has no tested adapter for its result shape |
-| `PostToolUse` hook → `updatedToolOutput` | rewrites the result **the model receives**, preserving the shape expected by Claude Code; audited today for one-part JSON MCP results and JSON in `Bash`/`PowerShell` standard output |
-| `mcp-server` (`vaultcompute mcp-server`) | offers the operations selected by `compute.mode`; arbitrary Python is absent by default |
-| `MessageDisplay` hook → `displayContent` | rewrites **what the screen shows**, leaving the transcript untouched — rehydration |
-
-The last one solves the problem Mode A cannot. Because `MessageDisplay` is
-display-only, the user reads real values while the conversation keeps the
-placeholders — so the values never re-enter the model's context on the next
-turn. The proxy has no way to make that distinction.
-
-The first and third exist because a host's hooks **cannot add a tool or edit a
-tool description**. Mode A does both by rewriting the `tools/list` response as
-it passes the proxy; here the same information has to arrive as session context,
-and the protected operation tools have to arrive the way every other tool does.
-
-This mode **requires `storage.backend: sqlite`**: every hook invocation is a
-separate process, so the vault has to be shared. The CLI refuses to run the
-hooks with a memory vault rather than minting tokens nobody will be able to
-resolve.
-
-Configured tools are fail-closed at the host boundary. A built-in such as
-`Read` or `WebFetch`, whose output has no audited adapter yet, is denied before
-it runs. If an admitted result is not structured JSON or its declared paths no
-longer match, the turn stops before another model request can receive the
-original. Undeclared tools remain untouched.
-
-**Mode D — a Codex plugin:**
-
-```bash
-# plugin source: ./plugins/vaultcompute-codex
-```
-
-Codex can run a hook after supported local tools and replace their result with
-VaultCompute's tokenized JSON. This covers shell commands, local execution, file
-patches, MCP tools, and most local function tools. It does not cover hosted
-tools such as web search, and some specialized paths may opt out.
-
-There is one deliberate difference from Claude Code: Codex currently exposes
-no display-only hook that can put real values on screen without also returning
-them to the conversation. Therefore the model and the user both see
-`⟦tok_…⟧`. The protection is useful when opaque output is acceptable; it is not
-feature parity with Mode C. See [`plugins/vaultcompute-codex/`](plugins/vaultcompute-codex/)
-and the exact host matrix in [`docs/host-adapters.md`](docs/host-adapters.md).
-
-**Mode B — an in-process library (used by a harness you write):**
+Save this complete example as `quickstart.py` in the repository, then run
+`uv run python quickstart.py`. It uses synthetic data and a scripted query;
+no API key, model service or MCP server is required.
 
 ```python
-from vaultcompute import VaultComputeSession
-from vaultcompute.config import load_config
-
-session = VaultComputeSession(load_config("vaultcompute.yaml"), session_id=session_id)
-system_prompt += "\n\n" + session.model_instructions
-protected = session.call_protected_tool("get_salary", get_salary, employee_id)
-# Async tools use: await session.call_protected_tool_async(...)
-# Send only `protected` to the model.
-visible_answer = session.render_final_answer(llm_answer)
-```
-
-Mode B is the reference integration: your code owns the tool result, the
-authorization decision and the final answer, so the loop actually closes. It
-works with any LLM SDK and needs no MCP. `VaultComputeSession` fails closed for an
-unknown tool, a missing required path, or a declared table with the wrong
-shape. Mark a genuinely optional path with `required: false`.
-
-For user-intent authorization, issue a capability on the trusted side and
-require an exact match when executing the model's proposed query:
-
-```python
+import json
+import sys
 from datetime import datetime, timedelta, timezone
-from vaultcompute import TableQueryCapability
+from uuid import uuid4
 
-ops = [{"op": "filter", "column": "salary", "cmp": ">", "value": 70000}]
+from vaultcompute import TableQueryCapability, VaultComputeSession
+from vaultcompute.config import VaultComputeConfig
+
+sys.stdout.reconfigure(encoding="utf-8")
+
+
+def list_employees():
+    return {"employees": [
+        {"name": "Manuel", "salary": 62000},
+        {"name": "Andrea", "salary": 71000},
+    ]}
+
+
+config = VaultComputeConfig.model_validate({
+    "schemas": {
+        "list_employees": {
+            "tables": [{
+                "path": "$.employees",
+                "columns": [{"name": "name"}, {"name": "salary"}],
+            }]
+        }
+    }
+})
+session = VaultComputeSession(config, session_id=uuid4().hex)
+protected = session.call_protected_tool("list_employees", list_employees)
+print("Tool result for the model:", json.dumps(protected, ensure_ascii=False))
+
+# The trusted application authorizes this exact request: highest-paid employee.
+ops = [
+    {"op": "sort_by", "column": "salary", "desc": True},
+    {"op": "limit", "n": 1},
+    {"op": "select", "columns": ["name", "salary"]},
+]
 capability = TableQueryCapability.issue(
-    session_id=session_id,
-    table_token=table_token,
+    session_id=session.session_id,
+    table_token=protected["employees"],
     ops=ops,
     expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
 )
+
+# Scripted stand-in for the model's proposed vault_table call.
+proposed_query = {"table": protected["employees"], "ops": ops}
 result_token = session.execute_authorized_query(
-    {"table": table_token, "ops": agent_ops}, capability=capability
+    proposed_query, capability=capability,
 )
+model_answer = f"Highest-paid employee: {result_token}"
+print("Model answer:", model_answer)
+print("User sees:", session.render_final_answer(model_answer))
 ```
 
-The application—not a PII classifier or an LLM judge—decides when to issue the
-capability. Changing `70000`, the table, the operation or the session is refused.
+The first two lines contain placeholders. The last line shows:
 
-Out of the box the security-relevant defaults are a memory vault,
-session-bound authorization, controlled table operations, and strict proxy
-handling. The subprocess Python sandbox is constructed only by integrations
-that explicitly enable or call the `python_unsafe` surface. See
-[`examples/demo_chat.py`](examples/demo_chat.py) for a deliberately unsafe
-Anthropic SDK compute example.
+```text
+User sees: Highest-paid employee: [{"name": "Andrea", "salary": 71000}]
+```
 
-`VaultComputeSession.model_instructions` supplies the placeholder rules and schema
-briefing. Integrations that need per-tool descriptions can still use
-`describe_schema()` and `describe_tables()`. The lower-level tokenizer,
-rehydrator and handlers remain available for advanced integrations.
+In a real integration, add `session.model_instructions` to the system prompt,
+send only protected tool results to the model, and dispatch its proposed table
+queries through the authorized handler. Issue capabilities from trusted
+application decisions, not automatically from whatever query the model proposes.
+Render only at the final user-facing boundary; never add that cleartext to model
+history. Async tools use `await session.call_protected_tool_async(...)`.
 
-The recommended Mode B API is intentionally small:
+The library does not supply an LLM conversation loop. See the
+[Python API](docs/api.md) for its supported methods and integration contract.
 
-- `model_instructions` — safe system context for placeholders and schemas;
-- `call_protected_tool()` / `call_protected_tool_async()` — invoke a tool and
-  return only its protected result;
-- `protect_tool_result()` — protect a result already obtained by a framework;
-- `execute_authorized_query()` — run an exact capability-bound table query;
-- `render_final_answer()` — reveal placeholders only at the user boundary.
+## Choose an integration
 
-The supported imports and compatibility promise are listed in
-[`docs/api.md`](docs/api.md). In particular, rendered cleartext belongs only at
-the UI boundary; never append it to the next model turn.
+| Mode | Use it when | Status | Final values |
+|---|---|---|---|
+| **B — Python library** | You own the application and model loop | Reference integration | Your application renders them |
+| **A — stdio MCP proxy** | You wrap one existing MCP server | Beta | Placeholders unless your client implements final rendering |
+| **C — Claude Code plugin** | You use the supported host hook shapes | Experimental | Display-only reveal through the adapter |
+| **D — Codex plugin** | You protect supported local tool results | Experimental guardrail | Placeholders remain visible |
+
+Start with **Mode B** when you write the application. For Mode A, configure
+your MCP client to launch the proxy with an explicit configuration path:
+
+```bash
+uv run vaultcompute --config vaultcompute.yaml -- python -m your_org.some_mcp_server
+```
+
+The downstream command above is a placeholder for your own MCP server. The
+proxy cannot intercept a third-party client's final answer for display.
+
+For host setup, follow the [Claude Code plugin guide](plugin/README.md) or the
+[Codex plugin guide](plugins/vaultcompute-codex/README.md). Both require a shared
+SQLite vault and the `vaultcompute` command on the host's `PATH`.
+The [host adapter contract](docs/host-adapters.md) lists supported shapes,
+failure behavior and real-host verification. Hook fixtures alone do not prove
+compatibility with an installed host version.
 
 ## Configuration
 
-Everything deployment-specific lives in one file. **This is the whole of what the current release reads:**
+The Python example above creates its configuration directly. For the CLI and
+plugins, create `vaultcompute.yaml`; start from
+[vaultcompute.example.yaml](vaultcompute.example.yaml). A minimal declaration is:
 
 ```yaml
-tokens:
-  default_ttl: 3600         # seconds a token stays resolvable
-
-storage:
-  backend: memory           # memory (default) | sqlite
-  path: ./vault.db          # sqlite only
-  encrypt_at_rest: false    # sqlite only; needs VAULTCOMPUTE_VAULT_KEY
-
-compute:
-  mode: controlled           # disabled | controlled | python_unsafe
-  max_calls_per_token: 8    # vault_compute calls on one token per window; 0 disables
-  rate_window_s: 60         # window length in seconds
-
-proxy:
-  strict: true              # false permits uninspected compatibility passthrough
-
 schemas:
-  hr_api.get_salary:
+  get_salary:
     sensitive_fields:
       - path: $.salary
         semantic_type: salary
         unit: EUR/year
-
-  hr_api.list_employees:
-    tables:                   # a whole list behind one token
-      - path: $.employees
-        columns:              # what the model may query on
-          - name: salary
-            semantic_type: salary
-            unit: EUR/year
-          - name: dept
-
-resources:                  # MCP resources, keyed by URI glob
-  "file:///hr/*.json":
-    sensitive_fields:
-      - path: $.salary
-        semantic_type: salary
-        unit: EUR/year
+      - path: $.bonus
+        required: false
 ```
 
-Pick `sqlite` when the vault has to outlive the process, or when tokenizing and
-rehydrating happen in different processes. Pick `memory` — the default — when
-neither is true: it is faster and puts nothing on disk. Asking for a backend this release does not have fails at load rather than
-being ignored.
+- Tool names must match the names passed to the integration exactly.
+- Paths are **required by default**. A missing required path stops protection;
+  `required: false` permits a legitimate absence. Unsupported path syntax and
+  overlapping declarations within one schema are rejected at load.
+- A `tables` declaration hides the entire list. Its columns specify what the
+  model may query. Scalar placeholders are not queryable with `vault_table`.
+- MCP `resources` use URI globs and support **`sensitive_fields` only**.
+  Resource `tables` declarations are rejected. An array can be hidden as a
+  sensitive field, but that does not make it a queryable table.
+- `compute.mode` defaults to `controlled`; the proxy and host operation server
+  also accept `disabled` and the explicit `python_unsafe` profile.
 
-`encrypt_at_rest: true` seals values with AES-256-GCM. The key comes from
-`VAULTCOMPUTE_VAULT_KEY` (32 bytes, base64) and never from the config file, since a
-key kept beside the database it protects is decoration. Install with
-`pip install vaultcompute[encryption]`, and generate a key with:
+### Storage and expiry
+
+Memory storage is the default and loses its vault when the process ends.
+Use SQLite when tokens must survive restarts or be shared across processes:
+
+```yaml
+storage:
+  backend: sqlite
+  path: ./vault.db
+  encrypt_at_rest: true
+tokens:
+  default_ttl: 3600
+```
+
+For encryption, install the optional dependency from the repository:
 
 ```bash
-python -c "import base64,os; print(base64.b64encode(os.urandom(32)).decode())"
+uv sync --extra encryption
 ```
 
-Only the value is sealed; token, session and timestamps stay readable because
-the store queries on them. Holding the file still reveals how many records
-exist and when.
+Or use `python -m pip install -e ".[encryption]"` in your own environment.
+Encrypted storage requires `VAULTCOMPUTE_VAULT_KEY` in every process that opens
+the vault: a base64-encoded 32-byte key, supplied outside the configuration and
+database. Values are encrypted with AES-256-GCM; session and lineage metadata
+remain readable. Without encryption enabled, SQLite stores cleartext values.
 
-`default_ttl` deserves a thought before you deploy: it governs how long a conversation containing placeholders stays readable. At the default of one hour, an answer the user comes back to tomorrow rehydrates as `[unknown token]`. A memory vault also loses live records on restart; SQLite preserves them until their TTL.
-
-### The rest of the file **[planned]**
-
-The block below is a design sketch, **not valid current configuration**.
-Unknown top-level sections are retained for forward compatibility, but typos or
-unimplemented keys inside a section VaultCompute already understands are rejected
-rather than silently ignored. Nothing below changes runtime behavior today.
-
-```yaml
-mode: local                 # local | server
-
-detokenize:
-  policy: session_bound     # allow_all | session_bound | claims | webhook
-  # webhook_url: https://myapp.internal/authz
-
-tokens:
-  consistency:              # per semantic_type
-    person_name: stable     # same value → same token (enables equality reasoning)
-    salary: fresh           # new token every time (no equality leakage)
-
-identity:
-  forward_headers: [Authorization, X-User-Id]   # only meaningful once an HTTP mode exists
-
-compute:
-  sandbox: subprocess       # subprocess | docker | disabled
-  timeout_s: 5
-  network: false
-```
-
-Where today's behavior differs from what those planned keys suggest: every token is minted fresh (no `stable` consistency), the policy is always `session_bound`, and `network: false` is not an enforced sandbox boundary. The subprocess sandbox exists only for the explicit `python_unsafe` surface and still has a hard-coded five-second timeout — see [Threat model](#threat-model--limitations).
-
-Two built-in profiles are designed to cover the common cases — **`local`** (single user, memory/SQLite vault, stdio MCP transport) and **`server`** (multi-user, Redis vault, webhook authorization, HTTP transport). **[planned]**: only the `local` shape exists, now with either vault.
-
-## Pluggable architecture
-
-The core is deliberately small: intercept → tokenize → track lineage → controlled computation → rehydrate. Everything environment-dependent hides behind three interfaces.
-
-| Port | Contract | Ships today | Designed **[planned]** |
-|---|---|---|---|
-| `TokenStore` | `mint_token`, `put`, `get`, `resolve`, `find_by_session`, `invalidate_cascade`, `purge_expired` | `memory` *(default)*, `sqlite` | `redis`, `postgres` |
-| `DetokenizePolicy` | `can_reveal` / `can_compute` / `can_query` | `session_bound` *(default)* | `allow_all`, `claims`, `webhook` |
-| `ComputeSandbox` | `run(code, resolved_inputs) → value` | `subprocess` | `docker` |
-
-The ports exist so the rest is additive rather than a rewrite. The two `TokenStore` implementations are held to one behavioural suite that uses the public interface only, so swapping them changes nothing else.
-
-Notes for adapter authors:
-
-- **TTL lives in the core**, so no storage adapter can forget it: expiry is checked on every `get`. SQLite values can be sealed with AES-256-GCM using a key supplied outside the database.
-- Detokenization is an **authorization point**, not a string substitution. `SessionBoundPolicy` refuses any token minted in another session, so a guessed ID resolves to `[redacted]` rather than a value. Per-user separation on top of that arrives with multi-user deployment **[planned]**.
-- Separate policy hooks gate arbitrary compute (`can_compute`) and constrained table queries (`can_query`), since permission to use a fixed query language must not imply permission to resolve the same value inside Python.
-
-## Deployment
-
-**Local (personal agent)** — the only deployment that exists today. Everything runs on your machine. With the default memory vault nothing survives the process, which matters because the placeholders you already sent the model *do* survive — in your chat history, your logs, your app's database — so a restart would leave those conversations pointing at values that exist nowhere. Switch to `backend: sqlite` if that matters, and treat the file as the secret it holds.
-
-**Server (internal chatbot, multi-user) [planned]:** VaultCompute and its vault would run **server-side, inside your network perimeter**, next to the APIs they wrap — never in the browser, never on the client. Rehydration as the last server-side hop before the response reaches the user's frontend, gated by the configured policy. Intended vault: Redis (native TTL) for tokens and encrypted values, plus Postgres for the lineage/audit log *without* the values. None of this is built; the per-user isolation it implies does not exist yet either.
+The default token lifetime is one hour. SQLite persistence does not extend it:
+expired or unknown tokens render as `[unknown token]`; tokens denied by policy
+render as `[redacted]`.
 
 ## Threat model & limitations
 
-Read this before deploying. Honesty here is a feature.
+Protection applies to **declared values on supported result paths**. It does
+not cover the entire conversation or replace your application's access control.
 
-**What VaultCompute protects against:** the LLM provider (and the model itself) learning the values returned by your private APIs, including values derived from them through computation — **against a model that follows the protocol**. A model actively trying to extract the values has channels available to it today; they are listed below, and closing them is ongoing work, not a solved problem.
+- **Undeclared values remain visible.** Review schemas whenever tools change.
+  User prompts, tool arguments and values sent through other application paths
+  are outside this protection.
+- **Unsupported results are blocked on strict paths.** Mode A strict rejects
+  batches and protected results with non-JSON text, images, blobs or
+  `structuredContent`. The Claude Code MCP adapter also rejects
+  `structuredContent`. `proxy.strict: false` allows compatibility passthrough
+  and gives up that blocking guarantee.
+- **Host coverage is limited.** Tools that do not enter an adapter's supported
+  hooks are not protected. Host telemetry may record original results before
+  a hook runs. The Codex adapter does not provide display-only rehydration.
+- **The vault and final rendering are trusted.** Real values exist in process
+  memory. Session-bound policy is the default; application authorization must
+  decide which user may access the underlying data and approve a query.
+- **Arbitrary Python is unsafe.** Its restricted subprocess and lineage-wide
+  attempt quota do not eliminate extraction through deliberate errors or
+  sandbox escapes. Table-derived tokens cannot be used as Python inputs.
+- **Hidden values limit reasoning.** The model can request supported mechanical
+  operations, but cannot independently assess the meaning of an unseen value.
 
-**What it does NOT protect against (non-goals):**
+`vaultcompute audit` checks transcripts against live vault records for exact
+cleartext matches and suspicious compute attempts. It is diagnostic evidence,
+not proof of non-disclosure; undeclared, transformed or expired values can evade
+the check. See [LIMITATIONS.md](LIMITATIONS.md) for the detailed threat model.
 
-- **Access control between your users and your APIs.** VaultCompute forwards the caller's identity headers untouched and lets *your* APIs enforce their own ACLs. If your API answers salary queries to anyone holding a service token, VaultCompute will faithfully tokenize data the caller should never have obtained. Enforcement belongs upstream; we just don't break it.
-- **Prompt-side leakage.** The user's question still goes to the provider. *"What is Andrea Tuscano's salary?"* reveals a name and an intent even if the answer is tokenized. Optional inbound prompt tokenization (NER-based) is planned, at a cost in answer quality.
-- **Inference leakage from planned stable tokens.** If the planned `consistency: stable` option is implemented, equality between occurrences will become visible to the provider. The current implementation always mints fresh tokens and does not read this planned key.
-- **A malicious or prompt-injected model when `compute.mode: python_unsafe` is enabled.** This optional profile deliberately assumes a cooperative model.
+## Development and next steps
 
-  What holds: results leave the sandbox only as new vault tokens, derived tokens inherit their inputs' policies and shortest TTL, `resolve()` refuses any token not declared in `inputs`, and the error channel carries exception *types* only — never messages, never child output.
+From the repository:
 
-  What does not hold today:
+```bash
+uv sync --all-extras --dev
+uv run pytest
+```
 
-  | Channel | Status | Closable? |
-  |---|---|---|
-  | Exception text was forwarded to the model — `raise ValueError(resolve(t))` returned the value in one call | **closed** | done: types only, with six regression tests |
-  | `open()` and `import` gave the child's code the filesystem | **raised, not closed** | done: builtins are an allow-list, so the obvious routes are absent. Escaping through Python's object graph needs no builtins and remains possible |
-  | Network reachable from compute code | **raised, not closed** — `import socket` now fails like any import. It was open on Linux/macOS; on Windows it failed only as a side effect of the stripped environment breaking socket initialization, an accident, not a defense | **properly only at OS level**: a container with networking off, or equivalent sandboxing |
-  | Success-vs-failure as a one-bit oracle — `result = 1/0 if resolve(t) > 50000 else 'ok'`, repeated, recovers an exact number in ~20 calls | **open, contained** | **no**, not while the model submits arbitrary Python — only a fixed set of operations (the table design above) removes it. `compute.max_calls_per_token`/`rate_window_s` (default: 8 attempts per 60s) reserve quota atomically against every original secret in the input lineage. Successes, failures and timeouts all count, and copying a value into a derived token does not reset the budget. Blocks are logged and surfaced by `vaultcompute audit`. A patient attacker can still continue across windows. |
+The CI workflow defines a test matrix for Linux, macOS and Windows on Python
+3.11–3.13. Host compatibility also needs real-host verification.
 
-  Capabilities remain optional and address authorization and intent; they are not required for the lineage-aware confidentiality rate limit. A richer CaMeL-style data-flow layer could further reduce the broader prompt-injection risk. Until then: **do not run arbitrary Python compute against data whose exposure you cannot tolerate, if the model's inputs come from sources you do not control.** Do not run with `sandbox: disabled` on real data at all.
-- **Quality-preserving magic.** If the model only sees `⟦tok⟧`, it cannot judge whether a salary is competitive or a diagnosis plausible. Controlled computation covers *mechanical* operations (compare, aggregate, filter); *semantic* judgment on hidden values is fundamentally impossible. That's the deal.
+The next release priorities are testing the built package in clean environments,
+verifying supported host versions and exercising real integration cases.
+Joins, group-by, HTTP transport and additional storage backends are possible
+future work, not available features.
 
-**Operational cautions:** rehydration is validated, but the model can still mangle placeholders — instruct it not to (`PLACEHOLDER_PROMPT`, exported from the package root) and expect the occasional `[unknown token]`. Vault compromise equals data compromise: values sit in cleartext in process memory (and on disk, unless `encrypt_at_rest` is on) today, so keep TTLs short and run VaultCompute in the same trust zone as the APIs it protects. Use `vaultcompute audit <transcript>` after a real session to check what actually reached the model, rather than trusting the screen — a working install and no install at all look identical there.
+## Documentation and contributing
 
-## Comparison
+- [Python API](docs/api.md): supported imports and the application boundary.
+- [Integration modes](docs/modes.md): detailed setup and tradeoffs.
+- [Host adapters](docs/host-adapters.md): exact coverage and compatibility checks.
+- [Architecture](docs/architecture.md): core, storage, policy and adapters.
+- [Configuration example](vaultcompute.example.yaml): supported YAML settings.
+- [Limitations](LIMITATIONS.md) and [changelog](CHANGELOG.md).
 
-| | Prompt PII redaction | Tool-result tokenization | Reversible (rehydration) | Operations on hidden data | Lineage / audit DAG | Self-hosted, open source |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| **VaultCompute** | plannedⁱ | ✅ | ✅ⁱⁱⁱ | ✅ⁱᵛ | ✅ | ✅ |
-| Microsoft Presidio | ✅ | ❌ | partial | ❌ | ❌ | ✅ |
-| Philter | ✅ | ❌ | ✅ | ❌ | ❌ | partial |
-| LLM Guard | ✅ | ❌ | ✅ | ❌ | ❌ | ✅ |
-| anonymize.dev (MCP) | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ (SaaS) |
-| CaMeL (research) | n/a | n/aⁱⁱ | n/a | ✅ | ✅ (capabilities) | ✅ (research code) |
-
-ⁱ Optional inbound NER pass, on the roadmap.
-ⁱⁱ CaMeL targets prompt injection, not provider-side privacy; its P-LLM/interpreter split is the closest architectural relative of VaultCompute's controlled-computation layer, and a direct inspiration.
-ⁱⁱⁱ In your own application code. Not available through an MCP client you did not write — see [`LIMITATIONS.md`](LIMITATIONS.md#rehydration-requires-a-client-you-control).
-ⁱᵛ Mechanical operations on a handful of tokens. Does not scale to long result sets until collective tokens land, and the sandbox is not hardened against a hostile model — see [Threat model](#threat-model--limitations).
-
-## Related work
-
-- **CaMeL** ([Defeating Prompt Injections by Design](https://arxiv.org/abs/2503.18813), Google DeepMind) — control/data-flow separation with capabilities; the privileged LLM writes code without ever seeing raw data.
-- **Microsoft Presidio** — the reference open-source PII detection/anonymization engine.
-- **Philter, LLM Guard, PII Shield** — prompt-side redaction proxies with reversible tokenization.
-
-## Roadmap
-
-Ordered by what the current release most needs, not by ambition.
-
-- [x] MVP: stdio MCP wrapper, memory store, session-bound policy, subprocess sandbox
-- [x] **Sandbox output hygiene** — exception types only; child stdout/stderr go to the operator, never to the model
-- [x] **Path validation at config load** — syntax the dialect cannot honor is refused at startup instead of being silently reinterpreted
-- [x] **Expiry frees memory** — the vault sweeps expired records instead of holding cleartext values for the life of the process
-- [x] **SQLite store** — a vault that survives a restart and can be shared between processes
-- [x] **Claude Code hooks** — tokenization and reveal without a proxy, and without placeholders reaching the user
-- [x] **Mode C implemented experimentally** — session briefing, strict supported-result adapters, shared operation server and display-only reveal
-- [x] **Host-specific adapters and fail-closed contracts** — Claude Code preserves each admitted result shape; configured unsupported built-ins are denied before execution
-- [x] **Codex plugin** — protected local tool results are replaced before the model continues; placeholders remain visible because Codex has no display-only reveal hook
-- [x] **Opt-in Claude Code compatibility check** — one real tool call, pinned to an exact installed version, audited against the persisted transcript
-- [x] **Collective (table) tokens** — one placeholder per list, queried by a fixed operation set and prohibited as arbitrary-Python inputs
-- [x] **Safe compute profiles** — controlled table operations by default; arbitrary Python only through explicit `python_unsafe` opt-in
-- [x] **Trusted-side table capabilities** — an application can authorize one exact session/table/query/expiry without an LLM judge
-- [x] **Strict Mode A boundary** — unsupported batches/content and protected shape drift are blocked by default, with permissive passthrough explicitly downgraded
-- [x] **128-bit capability tokens and mandatory host sessions** — no shared `unknown` session fallback
-- [x] **Encryption at rest** — AES-256-GCM, key from the environment, never from the config file
-- [x] **CI on Linux, macOS and Windows** — including the sandbox probes, so the documented behaviour is asserted per platform
-- [x] **Restricted builtins in the compute child** — the easy filesystem and network paths are gone without anyone installing Docker; not a boundary, a higher cost
-- [x] **Export the placeholder-preserving prompt fragment** as `PLACEHOLDER_PROMPT`, used by both demos and by the Mode C briefing
-- [x] **`vaultcompute audit` diagnostic** — cross-references a transcript against the vault for placeholders and exact cleartext matches; useful evidence, not proof of non-disclosure
-- [x] **Lineage-wide compute attempt quota** — atomic across threads and SQLite processes; successes, failures and timeouts share the original secrets' budget, derived tokens cannot reset it, and blocked bursts appear in `vaultcompute audit`
-- [x] **Fail-closed Mode B façade** — one session owns sync/async tool protection, policy, TTL, authorized table queries, model instructions and final rendering
-- [ ] Table joins, group-by and cross-table aggregation — the operations collective tokens do not have yet
-- [ ] Docker sandbox — the OS-level answer to network and filesystem, after the cheap in-process measures
-- [ ] HTTP proxy mode for plain REST APIs
-- [ ] Redis + Postgres adapters, webhook policy, audit log exporter
-- [ ] Optional inbound prompt tokenization (NER) — architecture spike complete;
-  it also requires a trusted tool-argument resolution boundary. See
-  [`docs/spikes/inbound-prompt-ner.md`](docs/spikes/inbound-prompt-ner.md).
-- [ ] Richer CaMeL-style capability propagation beyond exact Mode B table queries
-
-## Documentation
-
-### Current — kept in step with the code
-
-- **[`docs/modes.md`](docs/modes.md)** — which of the four integration modes you want, what each one can and cannot do, and the one question that decides it. Read this before installing anything.
-- **[`docs/api.md`](docs/api.md)** — the supported Python imports, the small Mode B surface, and its boundary contract.
-- **[`docs/host-adapters.md`](docs/host-adapters.md)** — exact Claude Code and Codex coverage, failure behavior, compatibility testing, and the evidence required before building a custom client.
-- **[`docs/architecture.md`](docs/architecture.md)** — how the code actually works. Component-by-component tour with a full end-to-end frame-by-frame example. Start here after this README.
-- **[`LIMITATIONS.md`](LIMITATIONS.md)** — what VaultCompute does *not* do, split into by-design (permanent) and MVP (temporary), with a cost estimate on every closable gap. Read before deploying against real data.
-- **[`vaultcompute.example.yaml`](vaultcompute.example.yaml)** — a copy-paste-ready configuration example, containing exactly the keys the current release reads.
-- **[`examples/try_modes.py`](examples/try_modes.py)** — runs the proxy, library, and Claude Code flows against the fake HR server with no API key. Codex needs its real hook host, so its contract is covered by the test suite instead of this scripted demo.
-- **[`examples/demo_chat.py`](examples/demo_chat.py)** — a runnable Anthropic + VaultCompute + fake HR MCP loop.
-
-### Project history — frozen, not maintained
-
-These two record how the MVP was designed and built in July 2026. They are useful for understanding *why* decisions were made and are **not updated as the code changes** — where they disagree with the three documents above, the documents above are right. (Known example: both describe the JSONPath dialect as supporting single-level wildcards; the implementation handles nested ones.)
-
-- **[`docs/superpowers/specs/2026-07-15-vaultcompute-mvp-design.md`](docs/superpowers/specs/2026-07-15-vaultcompute-mvp-design.md)** — the formal MVP design doc: scope, architecture, data model, key flows, testing strategy.
-- **[`docs/superpowers/plans/2026-07-15-vaultcompute-mvp.md`](docs/superpowers/plans/2026-07-15-vaultcompute-mvp.md)** — the task-by-task implementation plan the MVP was built from. Long (3,200 lines); read it for the reasoning behind a specific file, not front to back.
-
-## Contributing
-
-Issues and PRs welcome. Especially wanted: storage/policy adapters, red-teaming of the threat model, and real-world schema examples. Please read the threat model section before proposing features that move detokenization client-side.
+Issues and pull requests are welcome. Useful contributions include reproducible
+bugs, tests using synthetic data, schema examples and integration feedback.
+Include the package version, integration mode and host version where relevant;
+do not put real private data or vault keys in public reports.
 
 ## License
 
-[MIT](LICENSE).
+[MIT](LICENSE). Copyright © 2026 Manuel Pernigotto.

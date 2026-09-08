@@ -1,8 +1,14 @@
 # VaultCompute MVP — Design
 
+> Historical design, preserved for rationale only. This document predates the
+> implementation and contains obsolete APIs, defaults and limitations. It is
+> not an implementation plan or a current product contract. Use the
+> [README](../../README.md), [API](../api.md) and [architecture](../architecture.md)
+> for current behavior.
+
 **Date:** 2026-07-15
 **Status:** approved (pre-implementation)
-**Companion:** [../../../README.md](../../../README.md) — the product vision. This spec is the *first slice* of it.
+**Companion:** [../../README.md](../../README.md) — the current product introduction.
 
 ## 1. Scope
 

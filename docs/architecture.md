@@ -2,7 +2,7 @@
 
 A developer's tour of how VaultCompute actually works. Read this after the [README](../README.md) (which covers *why* the tool exists and what it promises) and before diving into the code.
 
-- Reference spec: [`docs/superpowers/specs/2026-07-15-vaultcompute-mvp-design.md`](superpowers/specs/2026-07-15-vaultcompute-mvp-design.md) — the formal MVP design.
+- Historical rationale: [original MVP design](archive/2026-07-15-mvp-design.md) — archived, not a specification of current behavior.
 - Known gaps: [`LIMITATIONS.md`](../LIMITATIONS.md) — what this document deliberately elides in favor of an idealized picture.
 
 ---

@@ -2,7 +2,7 @@
 
 Honest inventory of what VaultCompute does **not** do — split by whether the limit is inherent to the design or a temporary MVP gap. Read this before deploying against real data.
 
-For rationale and full threat-model discussion, see the [README](README.md#threat-model--limitations) and the [MVP design doc](docs/superpowers/specs/2026-07-15-vaultcompute-mvp-design.md).
+For the current security boundary, see the [README](README.md#threat-model--limitations) and [architecture](docs/architecture.md). The [original MVP design](docs/archive/2026-07-15-mvp-design.md) is retained only as historical rationale.
 
 ### How to read this
 
@@ -155,7 +155,7 @@ Everything below is a current-release gap. All of these are fixable and are call
 
 - ~~**[Mode A only] `resources/*` passed through untouched.**~~ **Closed for declared JSON resources in strict mode.** The proxy tracks `resources/read`, matches returned URIs against configured globs and tokenizes JSON text. A declared blob, non-JSON body, empty result or path mismatch is replaced by a safe error rather than forwarded.
 
-  In explicit permissive mode those shapes are logged and forwarded for compatibility; do not describe that mode as a security boundary.
+  In explicit permissive mode those shapes are logged and forwarded for compatibility; do not describe that mode as a security boundary. Resource schemas support `sensitive_fields` only: `tables` declarations are rejected at load. An array may be hidden as a sensitive field, but it will not be queryable through `vault_table`.
 
 - **[Mode A only] `prompts/*` is still not inspected.** Prompt templates are instructions rather than API data and nothing can be declared against them. If your server puts sensitive values inside prompt templates, the proxy will not find them.
 - **CLI proxy is stdio MCP only. [Mode A only]** The `vaultcompute -- <cmd>` CLI wraps a single downstream stdio MCP server. No HTTP proxy mode for REST APIs, no wrapping of remote/SSE MCP servers. Mode B (in-process library) has no transport concept — it plugs into any LLM SDK loop directly, MCP or not.
@@ -205,7 +205,7 @@ The subprocess sandbox is the one place where real values meet code the model wr
 
   Paths are now validated where a `SchemaField` is born: at config load through a Pydantic validator, and in the dataclass itself so Mode B gets the same guarantee without the YAML. Errors name the offending subscript and, for recursive descent, what the path was silently being read as. The low-level tokenizer preserves a non-match as a no-op for compatibility; the Mode B façade fails closed unless that path is configured with `required: false`.
 
-- **Overlapping declarations used to corrupt each other; they are now refused at load.** The tokenizer walks a tool's fields in order, so the same path declared twice tokenized its own placeholder the second time round — the vault held a token whose value was another token, and the user read `⟦tok_…⟧` where the value should have been. A path containing another (`$.employee` alongside `$.employee.salary`) did the same to a subtree. Both are rejected with a message naming the pair. For resources the overlap depends on the URI and cannot be caught statically, so matching globs are merged with the redundant declaration dropped.
+- **Overlapping declarations used to corrupt each other; they are now refused at load.** Duplicate paths, containing paths and intersecting wildcards/indices are rejected within each schema. For resources, different matching globs may still overlap. Their declarations retain all required-path checks; the tokenizer protects outer values first and skips already-protected locations, preserving coverage without nesting placeholders.
 
 - **Non-JSON results are not tokenized.** Mode A strict and the host adapters
   block a configured result that is not accepted JSON. Mode A permissive passes
