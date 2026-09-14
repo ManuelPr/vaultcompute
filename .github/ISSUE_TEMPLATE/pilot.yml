@@ -1,0 +1,33 @@
+name: Alpha pilot feedback
+description: Report a synthetic-data evaluation of the library or a host plugin.
+title: "[Pilot]: "
+body:
+  - type: markdown
+    attributes:
+      value: "Use synthetic data only. Suspected vulnerabilities belong in the private security reporting channel, not this form."
+  - type: dropdown
+    id: integration
+    attributes:
+      label: Integration tested
+      options: [Mode B library, Mode A proxy, Claude Code plugin, Codex plugin]
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions and installation
+      description: Package version, commit/tag, OS, Python, host/plugin version if applicable, and installation command.
+    validations:
+      required: true
+  - type: textarea
+    id: task
+    attributes:
+      label: Task and observed results
+      description: Intended task, synthetic schema, expected/actual output, and whether this was a scripted demo or real model/host run.
+    validations:
+      required: true
+  - type: textarea
+    id: friction
+    attributes:
+      label: Setup friction and next need
+      description: Setup time, unclear instructions, manual fixes and the smallest missing capability.
