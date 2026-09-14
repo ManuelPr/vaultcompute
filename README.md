@@ -11,7 +11,7 @@ Use it when an agent needs to filter, sort or aggregate private records without
 putting those records in the model's context. Your application still owns tool
 access, user authorization and the conversation loop.
 
-**Status: alpha (`0.1.0a1`).** The library, MCP proxy, token stores and host adapters
+**Status: alpha ([`0.1.0a1` on PyPI](https://pypi.org/project/vaultcompute/0.1.0a1/)).** The library, MCP proxy, token stores and host adapters
 are implemented. Host integrations are version-sensitive; test their supported
 result shapes before relying on them. See [limitations](https://github.com/ManuelPr/vaultcompute/blob/main/LIMITATIONS.md).
 
@@ -38,7 +38,17 @@ model; it is not a safe boundary against malicious code or prompt injection.
 
 ## Quick start
 
-Install from this repository with Python 3.11+ and `uv`:
+With Python 3.11+, install the published alpha in your Python environment:
+
+```bash
+python -m pip install "vaultcompute==0.1.0a1"
+```
+
+Save the complete example below as `quickstart.py` and run `python quickstart.py`.
+It uses synthetic data and a scripted query; no API key, model service or MCP
+server is required.
+
+To run the repository's examples with `uv` instead:
 
 ```bash
 git clone https://github.com/ManuelPr/vaultcompute
@@ -49,9 +59,7 @@ uv sync
 Alternatively, in your own Python environment, run `python -m pip install -e .`.
 The commands below use `uv run` to select the project's environment.
 
-Run `uv run python examples/quickstart.py`, or save the complete example below
-as `quickstart.py` and run `uv run python quickstart.py`. It uses synthetic data and a scripted query;
-no API key, model service or MCP server is required.
+Run `uv run python examples/quickstart.py` for the same example:
 
 ```python
 import json

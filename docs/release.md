@@ -1,5 +1,12 @@
 # Releasing VaultCompute
 
+`0.1.0a1` was published on 2026-09-14 to
+[TestPyPI](https://test.pypi.org/project/vaultcompute/0.1.0a1/) and
+[PyPI](https://pypi.org/project/vaultcompute/0.1.0a1/). Both distributions were
+verified after publication. The [GitHub prerelease](https://github.com/ManuelPr/vaultcompute/releases/tag/v0.1.0a1)
+records the immutable tag, commit, workflow runs and SHA-256 digests.
+The procedure below also applies to subsequent alpha releases with a new version.
+
 ## First alpha scope
 
 `0.1.0a1` is the first public alpha candidate. The product to evaluate is the
