@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a vulnerability privately
+    url: https://github.com/ManuelPr/vaultcompute/security/advisories/new
+    about: Use synthetic data; never post real vaults, keys or private transcripts publicly.

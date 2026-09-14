@@ -2,7 +2,17 @@
 
 All notable changes to VaultCompute are documented here.
 
-## Unreleased
+## 0.1.0a1 (in preparation)
+
+First public alpha candidate; no registry publication has occurred yet.
+
+### Distribution
+
+- MIT SPDX metadata and explicit source-archive contents.
+- Clean wheel and source installs checked across the supported CI matrix.
+- Manual, tag-bound Trusted Publishing through TestPyPI before PyPI.
+- Runnable controlled-query demo, pilot protocol and private security reporting.
+- Python selection in CI now explicitly follows the declared matrix.
 
 ### Security
 
@@ -15,7 +25,7 @@ All notable changes to VaultCompute are documented here.
 - Hook vault initialization failures now emit the host's blocking response.
 - Schema overlap validation now includes intersecting wildcards and indices.
 
-## 0.1.0 - 2026-09-04
+## Development snapshot - 2026-09-04 (unpublished)
 
 First public release candidate.
 

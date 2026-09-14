@@ -11,9 +11,9 @@ Use it when an agent needs to filter, sort or aggregate private records without
 putting those records in the model's context. Your application still owns tool
 access, user authorization and the conversation loop.
 
-**Status: pre-alpha.** The library, MCP proxy, token stores and host adapters
+**Status: alpha candidate (`0.1.0a1`), not yet published.** The library, MCP proxy, token stores and host adapters
 are implemented. Host integrations are version-sensitive; test their supported
-result shapes before relying on them. See [limitations](LIMITATIONS.md).
+result shapes before relying on them. See [limitations](https://github.com/ManuelPr/vaultcompute/blob/main/LIMITATIONS.md).
 
 ## How it works
 
@@ -49,8 +49,8 @@ uv sync
 Alternatively, in your own Python environment, run `python -m pip install -e .`.
 The commands below use `uv run` to select the project's environment.
 
-Save this complete example as `quickstart.py` in the repository, then run
-`uv run python quickstart.py`. It uses synthetic data and a scripted query;
+Run `uv run python examples/quickstart.py`, or save the complete example below
+as `quickstart.py` and run `uv run python quickstart.py`. It uses synthetic data and a scripted query;
 no API key, model service or MCP server is required.
 
 ```python
@@ -123,7 +123,7 @@ Render only at the final user-facing boundary; never add that cleartext to model
 history. Async tools use `await session.call_protected_tool_async(...)`.
 
 The library does not supply an LLM conversation loop. See the
-[Python API](docs/api.md) for its supported methods and integration contract.
+[Python API](https://github.com/ManuelPr/vaultcompute/blob/main/docs/api.md) for its supported methods and integration contract.
 
 ## Choose an integration
 
@@ -144,10 +144,10 @@ uv run vaultcompute --config vaultcompute.yaml -- python -m your_org.some_mcp_se
 The downstream command above is a placeholder for your own MCP server. The
 proxy cannot intercept a third-party client's final answer for display.
 
-For host setup, follow the [Claude Code plugin guide](plugin/README.md) or the
-[Codex plugin guide](plugins/vaultcompute-codex/README.md). Both require a shared
+For host setup, follow the [Claude Code plugin guide](https://github.com/ManuelPr/vaultcompute/blob/main/plugin/README.md) or the
+[Codex plugin guide](https://github.com/ManuelPr/vaultcompute/blob/main/plugins/vaultcompute-codex/README.md). Both require a shared
 SQLite vault and the `vaultcompute` command on the host's `PATH`.
-The [host adapter contract](docs/host-adapters.md) lists supported shapes,
+The [host adapter contract](https://github.com/ManuelPr/vaultcompute/blob/main/docs/host-adapters.md) lists supported shapes,
 failure behavior and real-host verification. Hook fixtures alone do not prove
 compatibility with an installed host version.
 
@@ -155,7 +155,7 @@ compatibility with an installed host version.
 
 The Python example above creates its configuration directly. For the CLI and
 plugins, create `vaultcompute.yaml`; start from
-[vaultcompute.example.yaml](vaultcompute.example.yaml). A minimal declaration is:
+[vaultcompute.example.yaml](https://github.com/ManuelPr/vaultcompute/blob/main/vaultcompute.example.yaml). A minimal declaration is:
 
 ```yaml
 schemas:
@@ -238,7 +238,7 @@ not cover the entire conversation or replace your application's access control.
 `vaultcompute audit` checks transcripts against live vault records for exact
 cleartext matches and suspicious compute attempts. It is diagnostic evidence,
 not proof of non-disclosure; undeclared, transformed or expired values can evade
-the check. See [LIMITATIONS.md](LIMITATIONS.md) for the detailed threat model.
+the check. See [LIMITATIONS.md](https://github.com/ManuelPr/vaultcompute/blob/main/LIMITATIONS.md) for the detailed threat model.
 
 ## Development and next steps
 
@@ -259,12 +259,14 @@ future work, not available features.
 
 ## Documentation and contributing
 
-- [Python API](docs/api.md): supported imports and the application boundary.
-- [Integration modes](docs/modes.md): detailed setup and tradeoffs.
-- [Host adapters](docs/host-adapters.md): exact coverage and compatibility checks.
-- [Architecture](docs/architecture.md): core, storage, policy and adapters.
-- [Configuration example](vaultcompute.example.yaml): supported YAML settings.
-- [Limitations](LIMITATIONS.md) and [changelog](CHANGELOG.md).
+- [Python API](https://github.com/ManuelPr/vaultcompute/blob/main/docs/api.md): supported imports and the application boundary.
+- [Integration modes](https://github.com/ManuelPr/vaultcompute/blob/main/docs/modes.md): detailed setup and tradeoffs.
+- [Host adapters](https://github.com/ManuelPr/vaultcompute/blob/main/docs/host-adapters.md): exact coverage and compatibility checks.
+- [Architecture](https://github.com/ManuelPr/vaultcompute/blob/main/docs/architecture.md): core, storage, policy and adapters.
+- [Configuration example](https://github.com/ManuelPr/vaultcompute/blob/main/vaultcompute.example.yaml): supported YAML settings.
+- [Limitations](https://github.com/ManuelPr/vaultcompute/blob/main/LIMITATIONS.md) and [changelog](https://github.com/ManuelPr/vaultcompute/blob/main/CHANGELOG.md).
+- [Release procedure](https://github.com/ManuelPr/vaultcompute/blob/main/docs/release.md), [pilot guide](https://github.com/ManuelPr/vaultcompute/blob/main/docs/pilot.md) and [next-version criteria](https://github.com/ManuelPr/vaultcompute/blob/main/docs/roadmap.md).
+- [Contributing](https://github.com/ManuelPr/vaultcompute/blob/main/CONTRIBUTING.md) and [private security reporting](https://github.com/ManuelPr/vaultcompute/blob/main/SECURITY.md).
 
 Issues and pull requests are welcome. Useful contributions include reproducible
 bugs, tests using synthetic data, schema examples and integration feedback.
@@ -273,4 +275,4 @@ do not put real private data or vault keys in public reports.
 
 ## License
 
-[MIT](LICENSE). Copyright © 2026 Manuel Pernigotto.
+[MIT](https://github.com/ManuelPr/vaultcompute/blob/main/LICENSE). Copyright © 2026 Manuel Pernigotto.
