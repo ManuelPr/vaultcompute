@@ -2,9 +2,11 @@
 
 All notable changes to VaultCompute are documented here.
 
-## 0.1.0a1 (in preparation)
+## 0.1.0a1 - 2026-09-14
 
-First public alpha candidate; no registry publication has occurred yet.
+First alpha of the Mode B library, with memory and SQLite storage, optional
+encryption and the CLI. Mode A remains a beta proxy; Modes C/D are experimental
+host adapters.
 
 ### Distribution
 

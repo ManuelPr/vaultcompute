@@ -11,7 +11,7 @@ Use it when an agent needs to filter, sort or aggregate private records without
 putting those records in the model's context. Your application still owns tool
 access, user authorization and the conversation loop.
 
-**Status: alpha candidate (`0.1.0a1`), not yet published.** The library, MCP proxy, token stores and host adapters
+**Status: alpha (`0.1.0a1`).** The library, MCP proxy, token stores and host adapters
 are implemented. Host integrations are version-sensitive; test their supported
 result shapes before relying on them. See [limitations](https://github.com/ManuelPr/vaultcompute/blob/main/LIMITATIONS.md).
 
