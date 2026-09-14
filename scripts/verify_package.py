@@ -24,6 +24,18 @@ from pathlib import Path, PurePosixPath
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def same_contents(actual: bytes, expected: bytes, name: str) -> bool:
+    """Git may check out text as CRLF on Windows; compare its text content.
+
+    Distribution SHA-256 checks remain byte-for-byte. Binary files are also
+    compared exactly, so newline normalization cannot hide a binary change.
+    """
+    path = PurePosixPath(name)
+    if path.suffix in {".py", ".md", ".toml", ".yaml", ".yml", ".json", ".lock", ".typed"} or path.name in {"LICENSE", ".gitignore"}:
+        return actual.replace(b"\r\n", b"\n") == expected.replace(b"\r\n", b"\n")
+    return actual == expected
+
+
 def metadata_checks(raw: bytes, version: str) -> None:
     metadata = email.parser.BytesParser().parsebytes(raw)
     assert metadata["Metadata-Version"] == "2.4"
@@ -59,9 +71,9 @@ def check_artifacts(directory: Path) -> tuple[Path, Path, str]:
         )}
         assert names == expected, f"unexpected wheel contents: {names ^ expected}"
         for name, contents in source_files.items():
-            assert archive.read(name) == contents, f"stale source in wheel: {name}"
+            assert same_contents(archive.read(name), contents, name), f"stale source in wheel: {name}"
         metadata_checks(archive.read(info + "METADATA"), version)
-        assert archive.read(info + "licenses/LICENSE") == license_bytes
+        assert same_contents(archive.read(info + "licenses/LICENSE"), license_bytes, "LICENSE")
         assert b"vaultcompute = vaultcompute.cli:main" in archive.read(info + "entry_points.txt")
 
     allowed_dirs = {"src", "tests", "examples", "scripts", "docs", "plugin", "plugins"}
@@ -82,13 +94,13 @@ def check_artifacts(directory: Path) -> tuple[Path, Path, str]:
             assert path.name != ".mcp.json" or name in plugin_configs, name
             local = ROOT / name
             if name != "PKG-INFO" and local.is_file():
-                assert archive.extractfile(member).read() == local.read_bytes(), f"stale sdist file: {name}"
+                assert same_contents(archive.extractfile(member).read(), local.read_bytes(), name), f"stale sdist file: {name}"
         for name in allowed_files | plugin_configs | {"examples/quickstart.py", "scripts/package_smoke.py", "scripts/verify_package.py"}:
             assert name in members, f"missing sdist file: {name}"
         for name, contents in source_files.items():
-            assert archive.extractfile(members["src/" + name]).read() == contents, name
+            assert same_contents(archive.extractfile(members["src/" + name]).read(), contents, name), name
         metadata_checks(archive.extractfile(members["PKG-INFO"]).read(), version)
-        assert archive.extractfile(members["LICENSE"]).read() == license_bytes
+        assert same_contents(archive.extractfile(members["LICENSE"]).read(), license_bytes, "LICENSE")
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     example = re.search(r"```python\n(.*?)\n```", readme, re.S)
