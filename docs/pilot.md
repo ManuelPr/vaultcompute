@@ -22,7 +22,7 @@ first attempt, then record what help was needed.
 
 1. Install the exact candidate into a new environment.
 2. Run [examples/quickstart.py](../examples/quickstart.py). Verify that the two
-   model-facing lines contain placeholders and the final line selects Andrea.
+   model-facing lines contain placeholders and the final line selects James.
 3. Replace the synthetic tool with another synthetic JSON response; declare
    its table and at least one optional field. Use the same exact tool name in
    the schema and call.

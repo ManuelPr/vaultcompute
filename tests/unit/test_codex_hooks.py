@@ -50,7 +50,7 @@ def test_codex_replaces_a_structured_result_with_tokenized_feedback(tmp_path):
             {
                 "session_id": SESSION,
                 "tool_name": TOOL,
-                "tool_response": {"name": "Andrea", "salary": 71000},
+                "tool_response": {"name": "James", "salary": 71000},
             },
             config=_config(),
             store=store,
@@ -61,7 +61,7 @@ def test_codex_replaces_a_structured_result_with_tokenized_feedback(tmp_path):
         store.close()
     assert out["continue"] is False
     protected = json.loads(out["stopReason"])
-    assert protected["name"] == "Andrea"
+    assert protected["name"] == "James"
     assert protected["salary"].startswith("⟦tok_")
     assert "71000" not in out["stopReason"]
 
@@ -78,7 +78,7 @@ def test_codex_replaces_an_mcp_content_object(tmp_path):
                     "content": [
                         {
                             "type": "text",
-                            "text": '{"name": "Andrea", "salary": 71000}',
+                            "text": '{"name": "James", "salary": 71000}',
                         }
                     ]
                 },
@@ -102,7 +102,7 @@ def test_codex_malformed_result_is_replaced_by_safe_feedback(tmp_path):
             {
                 "session_id": SESSION,
                 "tool_name": TOOL,
-                "tool_response": "Andrea salary is 71000",
+                "tool_response": "James salary is 71000",
             },
             config=_config(),
             store=store,

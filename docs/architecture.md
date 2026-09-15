@@ -9,7 +9,7 @@ A developer's tour of how VaultCompute actually works. Read this after the [READ
 
 ## 1. The problem, in one paragraph
 
-When you connect an LLM to your private APIs via MCP tools, every tool response flows back into the model's context — and therefore to the LLM provider. Ask an agent *"What is Andrea's salary?"*, and the HR API's response (the actual number) is logged by Anthropic/OpenAI as part of the conversation. Traditional PII redaction proxies (Presidio, Philter) scrub the **user's prompt** before it reaches the model, but in agentic setups the sensitive payload is almost always in the tool response, not the prompt. That's the gap VaultCompute covers.
+When you connect an LLM to your private APIs via MCP tools, every tool response flows back into the model's context — and therefore to the LLM provider. Ask an agent *"What is James's salary?"*, and the HR API's response (the actual number) is logged by Anthropic/OpenAI as part of the conversation. Traditional PII redaction proxies (Presidio, Philter) scrub the **user's prompt** before it reaches the model, but in agentic setups the sensitive payload is almost always in the tool response, not the prompt. That's the gap VaultCompute covers.
 
 ## 2. Three ideas, in order
 
@@ -397,25 +397,25 @@ Answers the question a screenshot cannot: did any hidden value actually reach th
 
 A thin argparse layer. `vaultcompute [--config PATH] -- <cmd> [args...]`: parses the pre-`--` options, treats everything after `--` as the downstream command, calls `run_proxy`. `vaultcompute hook <event> --host claude-code|codex` reads a JSON hook event from stdin and dispatches through [`hooks.py`](../src/vaultcompute/hooks.py) to the chosen adapter (Modes C and D). `vaultcompute mcp-server` starts the shared `vault_compute`/`vault_table` MCP server. `vaultcompute audit <transcript>` runs the check above. Also exposed as `python -m vaultcompute` via [`__main__.py`](../src/vaultcompute/__main__.py). `main()` reconfigures `stdin`/`stdout`/`stderr` to UTF-8 before anything else runs — Windows' default console codepage cannot represent the token delimiters, and a binary a host invokes by bare command name never gets `PYTHONIOENCODING` set for it.
 
-## 5. End-to-end example: "Who earns more, Manuel or Andrea?"
+## 5. End-to-end example: "Who earns more, John or James?"
 
-Setup: `fake_hr_mcp` (in [`examples/fake_hr_mcp/`](../examples/fake_hr_mcp/)) hard-codes `Manuel Pernigotto → 62000`, `Andrea Tuscano → 71000`. Config declares `$.salary` as sensitive on `get_salary`. This trace deliberately enables `compute.mode: python_unsafe`; it illustrates the legacy free-form compute path, not the default controlled profile.
+Setup: `fake_hr_mcp` (in [`examples/fake_hr_mcp/`](../examples/fake_hr_mcp/)) hard-codes `John Smith → 62000`, `James Brown → 71000`. Config declares `$.salary` as sensitive on `get_salary`. This trace deliberately enables `compute.mode: python_unsafe`; it illustrates the legacy free-form compute path, not the default controlled profile.
 
 The harness in this trace is one you wrote — [`examples/demo_chat.py`](../examples/demo_chat.py) is the running version of it. Frames 1–6 play out identically under a third-party MCP client; frame 7 is the one that requires your own code, and the reason the trace is written this way.
 
 ### Frame 1: user asks, harness lists tools
 ```
-user       → harness: "Who earns more, Manuel Pernigotto or Andrea Tuscano?"
+user       → harness: "Who earns more, John Smith or James Brown?"
 harness    → Anthropic: messages + tools=[get_salary, vault_compute]
 ```
 `vault_compute` is in the tool list because the proxy injected it into the `tools/list` response.
 
-### Frame 2: model asks for Manuel's salary
+### Frame 2: model asks for John's salary
 ```
-Claude     → harness: tool_use(get_salary, {"name": "Manuel Pernigotto"})
-harness    → proxy:   tools/call get_salary("Manuel Pernigotto")
+Claude     → harness: tool_use(get_salary, {"name": "John Smith"})
+harness    → proxy:   tools/call get_salary("John Smith")
 proxy      → child:   (forwarded)
-child      → proxy:   {"content":[{"type":"text","text":'{"name":"Manuel Pernigotto","salary":62000}'}]}
+child      → proxy:   {"content":[{"type":"text","text":'{"name":"John Smith","salary":62000}'}]}
 ```
 
 The proxy sees the `tools/call` response, finds `get_salary` in the pending-calls map, and calls the tokenizer:
@@ -424,23 +424,23 @@ tokenizer:
   match $.salary → 62000
   mint token: ⟦tok_7f3a1b2c6e9645d4b17f425a58992275⟧
   vault.put({token, value: 62000, dtype: number, semantic_type: salary, unit: EUR/year, session: sess_abc, ...})
-  return {"name": "Manuel Pernigotto", "salary": "⟦tok_7f3a1b2c6e9645d4b17f425a58992275⟧"}
+  return {"name": "John Smith", "salary": "⟦tok_7f3a1b2c6e9645d4b17f425a58992275⟧"}
 ```
 
 ```
 proxy      → harness: response with tokenized salary
-harness    → Anthropic: tool_result = '{"name":"Manuel Pernigotto","salary":"⟦tok_7f3a1b2c6e9645d4b17f425a58992275⟧"}'
+harness    → Anthropic: tool_result = '{"name":"John Smith","salary":"⟦tok_7f3a1b2c6e9645d4b17f425a58992275⟧"}'
 ```
 
 **Anthropic has never seen 62000.**
 
-### Frame 3: model asks for Andrea's salary
+### Frame 3: model asks for James's salary
 Same round-trip. Now the vault has two records; Anthropic has seen two token strings.
 
 ### Frame 4: model needs to compare, calls vault_compute
 ```
 Claude     → harness: tool_use(vault_compute, {
-  "code": "result = 'Manuel Pernigotto' if resolve('⟦tok_7f3a1b2c6e9645d4b17f425a58992275⟧') > resolve('⟦tok_2d81e9f43a1244709732a7aa30cc2e39⟧') else 'Andrea Tuscano'",
+  "code": "result = 'John Smith' if resolve('⟦tok_7f3a1b2c6e9645d4b17f425a58992275⟧') > resolve('⟦tok_2d81e9f43a1244709732a7aa30cc2e39⟧') else 'James Brown'",
   "inputs": ["⟦tok_7f3a1b2c6e9645d4b17f425a58992275⟧", "⟦tok_2d81e9f43a1244709732a7aa30cc2e39⟧"]
 })
 ```
@@ -449,7 +449,7 @@ Claude     → harness: tool_use(vault_compute, {
 The proxy sees `params.name == "vault_compute"` in the incoming `tools/call` and routes to `handle_vault_compute` (never forwards to the child). It:
 1. Verifies both tokens exist, matching session, `can_compute` passes.
 2. Builds the private input map for the two 128-bit tokens (`62000` and `71000`).
-3. Calls sandbox → subprocess `python -I` → `exec` the code → `62000 > 71000` is `False` → `result = 'Andrea Tuscano'` → stdout `{"ok": true, "value": "Andrea Tuscano"}`.
+3. Calls sandbox → subprocess `python -I` → `exec` the code → `62000 > 71000` is `False` → `result = 'James Brown'` → stdout `{"ok": true, "value": "James Brown"}`.
 4. Mints `⟦tok_9c1bf051f23546eeb0e5d29276da9217⟧` with `lineage.op="vault_compute"`, both input tokens in `lineage.inputs`, and `lineage.code_digest=sha256(code)`.
 5. Returns the new token.
 
@@ -470,9 +470,9 @@ The harness calls `rehydrate("The higher earner is ⟦tok_9c1bf051f23546eeb0e5d2
 - Regex finds `⟦tok_9c1bf051f23546eeb0e5d29276da9217⟧`.
 - `store.get` returns the record.
 - `policy.can_reveal(ctx=sess_abc, record)` → `True`.
-- Substitute → `"The higher earner is Andrea Tuscano."`
+- Substitute → `"The higher earner is James Brown."`
 
-Printed to the user: **"The higher earner is Andrea Tuscano."**
+Printed to the user: **"The higher earner is James Brown."**
 
 Under Claude Desktop or Cursor, with nothing making that call, the last line reads **"The higher earner is ⟦tok_9c1bf051f23546eeb0e5d29276da9217⟧."** instead. Same protection, no delivery.
 

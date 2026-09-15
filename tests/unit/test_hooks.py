@@ -51,7 +51,7 @@ def _post_tool_use_event(output, *, tool=TOOL, session=SESSION):
         "session_id": session,
         "hook_event_name": "PostToolUse",
         "tool_name": tool,
-        "tool_input": {"name": "Andrea Tuscano"},
+        "tool_input": {"name": "James Brown"},
         "tool_output": output,
         "tool_use_id": "toolu_01ABC",
     }
@@ -79,7 +79,7 @@ def test_declared_field_is_replaced_before_the_model_sees_it(config, vault_path)
     store = _store(vault_path)
     try:
         out = hooks.handle_post_tool_use(
-            _post_tool_use_event('{"name": "Andrea Tuscano", "salary": 71000}'),
+            _post_tool_use_event('{"name": "James Brown", "salary": 71000}'),
             config=config,
             store=store,
         )
@@ -88,7 +88,7 @@ def test_declared_field_is_replaced_before_the_model_sees_it(config, vault_path)
 
     rewritten = json.loads(out["hookSpecificOutput"]["updatedToolOutput"])
     assert out["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
-    assert rewritten["name"] == "Andrea Tuscano"  # undeclared, passes through
+    assert rewritten["name"] == "James Brown"  # undeclared, passes through
     assert rewritten["salary"].startswith("⟦tok_")
     assert "71000" not in out["hookSpecificOutput"]["updatedToolOutput"]
 
@@ -247,7 +247,7 @@ def test_the_no_text_output_stops_without_echoing_its_values(config, vault_path)
             {
                 "session_id": SESSION,
                 "tool_name": TOOL,
-                "tool_response": "Andrea Tuscano 71000",  # a real value, must never appear
+                "tool_response": "James Brown 71000",  # a real value, must never appear
             },
             config=config,
             store=store,
@@ -257,7 +257,7 @@ def test_the_no_text_output_stops_without_echoing_its_values(config, vault_path)
     assert out["continue"] is False
     assert "not JSON" in out["stopReason"]
     assert "71000" not in out["stopReason"]
-    assert "Andrea Tuscano" not in out["stopReason"]
+    assert "James Brown" not in out["stopReason"]
 
 
 # --- tool_response: the actual shape a real host sends for MCP tools -------
@@ -279,7 +279,7 @@ def _mcp_post_tool_use_event(text: str, *, tool=TOOL, session=SESSION):
         "effort": {"level": "medium"},
         "hook_event_name": "PostToolUse",
         "tool_name": tool,
-        "tool_input": {"name": "Andrea Tuscano"},
+        "tool_input": {"name": "James Brown"},
         "tool_response": [{"type": "text", "text": text}],
         "tool_use_id": "toolu_01ABC",
         "duration_ms": 42,
@@ -290,7 +290,7 @@ def test_the_real_mcp_event_shape_is_tokenized(config, vault_path):
     store = _store(vault_path)
     try:
         out = hooks.handle_post_tool_use(
-            _mcp_post_tool_use_event('{"name": "Andrea Tuscano", "salary": 71000}'),
+            _mcp_post_tool_use_event('{"name": "James Brown", "salary": 71000}'),
             config=config,
             store=store,
         )
@@ -381,7 +381,7 @@ def test_tokenize_in_one_store_then_reveal_from_another(config, vault_path):
     writer = _store(vault_path)
     try:
         out = hooks.handle_post_tool_use(
-            _post_tool_use_event('{"name": "Andrea Tuscano", "salary": 71000}'),
+            _post_tool_use_event('{"name": "James Brown", "salary": 71000}'),
             config=config,
             store=writer,
         )
@@ -392,7 +392,7 @@ def test_tokenize_in_one_store_then_reveal_from_another(config, vault_path):
     reader = _store(vault_path)
     try:
         shown = hooks.handle_message_display(
-            _display_event(f"Andrea earns {token}."),
+            _display_event(f"James earns {token}."),
             store=reader,
             policy=SessionBoundPolicy(),
         )
@@ -400,7 +400,7 @@ def test_tokenize_in_one_store_then_reveal_from_another(config, vault_path):
         reader.close()
 
     assert shown["hookSpecificOutput"]["hookEventName"] == "MessageDisplay"
-    assert shown["hookSpecificOutput"]["displayContent"] == "Andrea earns 71000."
+    assert shown["hookSpecificOutput"]["displayContent"] == "James earns 71000."
 
 
 def test_another_session_cannot_reveal_the_token(config, vault_path):
@@ -416,7 +416,7 @@ def test_another_session_cannot_reveal_the_token(config, vault_path):
     reader = _store(vault_path)
     try:
         shown = hooks.handle_message_display(
-            _display_event(f"Andrea earns {token}.", session="sess_someone_else"),
+            _display_event(f"James earns {token}.", session="sess_someone_else"),
             store=reader,
             policy=SessionBoundPolicy(),
         )
@@ -490,7 +490,7 @@ def test_cli_round_trip_over_two_invocations(monkeypatch, capsys, tmp_path, vaul
         monkeypatch,
         capsys,
         hooks.POST_TOOL_USE,
-        _post_tool_use_event('{"name": "Andrea Tuscano", "salary": 71000}'),
+        _post_tool_use_event('{"name": "James Brown", "salary": 71000}'),
         cfg,
     )
     token = json.loads(json.loads(first.out)["hookSpecificOutput"]["updatedToolOutput"])["salary"]
@@ -500,10 +500,10 @@ def test_cli_round_trip_over_two_invocations(monkeypatch, capsys, tmp_path, vaul
         monkeypatch,
         capsys,
         hooks.MESSAGE_DISPLAY,
-        _display_event(f"Andrea earns {token}."),
+        _display_event(f"James earns {token}."),
         cfg,
     )
-    assert json.loads(second.out)["hookSpecificOutput"]["displayContent"] == "Andrea earns 71000."
+    assert json.loads(second.out)["hookSpecificOutput"]["displayContent"] == "James earns 71000."
 
 
 def test_cli_blocks_on_unreadable_input(monkeypatch, capsys, tmp_path, vault_path):
@@ -617,7 +617,7 @@ def test_a_table_only_tool_is_tokenized_by_the_hook(table_config, vault_path):
                 "session_id": SESSION,
                 "tool_name": TABLE_TOOL,
                 "tool_output": json.dumps(
-                    {"employees": [{"name": "Andrea", "salary": 71000}]}
+                    {"employees": [{"name": "James", "salary": 71000}]}
                 ),
             },
             config=table_config,
@@ -629,7 +629,7 @@ def test_a_table_only_tool_is_tokenized_by_the_hook(table_config, vault_path):
     assert out is not None, "returning None hands the host the real values"
     rewritten = out["hookSpecificOutput"]["updatedToolOutput"]
     assert "71000" not in rewritten
-    assert "Andrea" not in rewritten
+    assert "James" not in rewritten
     assert json.loads(rewritten)["employees"].startswith("⟦tok_")
 
 
@@ -644,7 +644,7 @@ def test_the_table_token_is_queryable_from_another_process(table_config, vault_p
                 "session_id": SESSION,
                 "tool_name": TABLE_TOOL,
                 "tool_output": json.dumps(
-                    {"employees": [{"name": "Andrea", "salary": 71000}, {"name": "Maria", "salary": 55000}]}
+                    {"employees": [{"name": "James", "salary": 71000}, {"name": "Emily", "salary": 55000}]}
                 ),
             },
             config=table_config,

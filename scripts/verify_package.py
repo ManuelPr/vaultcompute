@@ -136,8 +136,8 @@ def install_checks(artifact: Path, version: str, uv: str) -> None:
                                 check=True, capture_output=True, text=True, encoding="utf-8")
         lines = result.stdout.splitlines()
         assert len(lines) == 3
-        assert all(secret not in "\n".join(lines[:2]) for secret in ("Manuel", "Andrea", "62000", "71000"))
-        assert lines[-1] == 'User sees: Highest-paid employee: [{"name": "Andrea", "salary": 71000}]'
+        assert all(secret not in "\n".join(lines[:2]) for secret in ("John", "James", "62000", "71000"))
+        assert lines[-1] == 'User sees: Highest-paid employee: [{"name": "James", "salary": 71000}]'
         print("Installed quickstart output and model-visible privacy checks passed.", flush=True)
         run(uv, "pip", "install", "--python", python, str(artifact) + "[encryption]")
         run(python, "-I", "smoke.py", "--version", version, "--encryption")

@@ -99,12 +99,12 @@ async def test_get_salary_response_is_tokenized(proxy_subprocess):
     nid = await _initialize(proc, 1)
     await _send(proc, {
         "jsonrpc": "2.0", "id": nid, "method": "tools/call",
-        "params": {"name": "get_salary", "arguments": {"name": "Manuel Pernigotto"}},
+        "params": {"name": "get_salary", "arguments": {"name": "John Smith"}},
     })
     resp = await _recv(proc)
     text = resp["result"]["content"][0]["text"]
     parsed = json.loads(text)
-    assert parsed["name"] == "Manuel Pernigotto"
+    assert parsed["name"] == "John Smith"
     assert isinstance(parsed["salary"], str)
     assert TOKEN_RE.fullmatch(parsed["salary"])
 
@@ -115,14 +115,14 @@ async def test_vault_compute_returns_derived_token(proxy_subprocess):
 
     await _send(proc, {
         "jsonrpc": "2.0", "id": nid, "method": "tools/call",
-        "params": {"name": "get_salary", "arguments": {"name": "Manuel Pernigotto"}},
+        "params": {"name": "get_salary", "arguments": {"name": "John Smith"}},
     })
     a = json.loads((await _recv(proc))["result"]["content"][0]["text"])
     nid += 1
 
     await _send(proc, {
         "jsonrpc": "2.0", "id": nid, "method": "tools/call",
-        "params": {"name": "get_salary", "arguments": {"name": "Andrea Tuscano"}},
+        "params": {"name": "get_salary", "arguments": {"name": "James Brown"}},
     })
     b = json.loads((await _recv(proc))["result"]["content"][0]["text"])
     nid += 1
@@ -131,7 +131,7 @@ async def test_vault_compute_returns_derived_token(proxy_subprocess):
     await _send(proc, {
         "jsonrpc": "2.0", "id": nid, "method": "tools/call",
         "params": {"name": "vault_compute", "arguments": {
-            "code": f"result = 'Manuel Pernigotto' if resolve({a_tok!r}) > resolve({b_tok!r}) else 'Andrea Tuscano'",
+            "code": f"result = 'John Smith' if resolve({a_tok!r}) > resolve({b_tok!r}) else 'James Brown'",
             "inputs": [a_tok, b_tok],
         }},
     })
@@ -145,7 +145,7 @@ async def test_vault_compute_returns_derived_token(proxy_subprocess):
         "params": {"text": f"The higher earner is {new_token}.", "session_id": "PROBE_SESSION_UNUSED"},
     })
     rehy = await _recv(proc)
-    assert rehy["result"]["text"] == "The higher earner is Andrea Tuscano."
+    assert rehy["result"]["text"] == "The higher earner is James Brown."
 
 
 async def test_protected_tool_description_explains_its_tokens(proxy_subprocess):
@@ -175,7 +175,7 @@ async def test_tool_result_carries_no_extra_parts(proxy_subprocess):
     nid = await _initialize(proc, 1)
     await _send(proc, {
         "jsonrpc": "2.0", "id": nid, "method": "tools/call",
-        "params": {"name": "get_salary", "arguments": {"name": "Manuel Pernigotto"}},
+        "params": {"name": "get_salary", "arguments": {"name": "John Smith"}},
     })
     content = (await _recv(proc))["result"]["content"]
 

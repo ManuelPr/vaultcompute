@@ -34,9 +34,9 @@ TTL = datetime.now(tz=timezone.utc) + timedelta(hours=1)
 SESSION = "s"
 
 ROWS = [
-    {"name": "Andrea Tuscano", "salary": 71000, "dept": "Eng"},
-    {"name": "Manuel Pernigotto", "salary": 62000, "dept": "Eng"},
-    {"name": "Maria Rossi", "salary": 55000, "dept": "Sales"},
+    {"name": "James Brown", "salary": 71000, "dept": "Eng"},
+    {"name": "John Smith", "salary": 62000, "dept": "Eng"},
+    {"name": "Emily Johnson", "salary": 55000, "dept": "Sales"},
 ]
 SCHEMA = TableSchema(
     columns=(
@@ -60,7 +60,7 @@ def test_filter_sort_limit_select_compose():
             {"op": "limit", "n": 1},
             {"op": "select", "columns": ["name"]},
         ],
-    ) == [{"name": "Andrea Tuscano"}]
+    ) == [{"name": "James Brown"}]
 
 
 @pytest.mark.parametrize(
@@ -81,8 +81,8 @@ def test_mean_is_a_number_not_a_row_list():
 
 
 def test_contains_matches_substrings():
-    got = run_query(ROWS, SCHEMA, [{"op": "filter", "column": "name", "cmp": "contains", "value": "Rossi"}])
-    assert [r["name"] for r in got] == ["Maria Rossi"]
+    got = run_query(ROWS, SCHEMA, [{"op": "filter", "column": "name", "cmp": "contains", "value": "Johnson"}])
+    assert [r["name"] for r in got] == ["Emily Johnson"]
 
 
 def test_a_value_operation_must_come_last():
@@ -201,7 +201,7 @@ def test_no_row_value_survives_into_the_tokenized_output():
     )
     rendered = json.dumps(out)
     assert "71000" not in rendered
-    assert "Andrea Tuscano" not in rendered
+    assert "James Brown" not in rendered
 
 
 # --- the tool -------------------------------------------------------------
@@ -375,7 +375,7 @@ def test_a_row_result_rehydrates_as_json_not_python_repr():
     store = MemoryTokenStore()
     rows = _query(store, _table_token(store), [{"op": "limit", "n": 1}, {"op": "select", "columns": ["name"]}])
     shown = rehydrate(f"top: {rows}", SESSION, store, SessionBoundPolicy())
-    assert shown == 'top: [{"name": "Andrea Tuscano"}]'
+    assert shown == 'top: [{"name": "James Brown"}]'
     assert "'" not in shown
 
 

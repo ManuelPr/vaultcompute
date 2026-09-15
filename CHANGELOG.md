@@ -2,6 +2,11 @@
 
 All notable changes to VaultCompute are documented here.
 
+## 0.1.0a2 - 2026-09-15
+
+- Replace personal names in examples, synthetic fixtures and documentation with
+  generic English names, keeping the same salaries and expected behavior.
+
 ## 0.1.0a1 - 2026-09-14
 
 First alpha of the Mode B library, with memory and SQLite storage, optional

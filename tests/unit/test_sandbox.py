@@ -31,10 +31,10 @@ def test_unicode_roundtrip():
     sb = SubprocessSandbox()
     result = sb.run(
         code="result = resolve('name') + ' 👋'",
-        inputs={"name": "Andrea"},
+        inputs={"name": "James"},
         timeout_s=5.0,
     )
-    assert result == "Andrea 👋"
+    assert result == "James 👋"
 
 
 def test_numeric_precision_preserved():

@@ -376,7 +376,7 @@ was given.
 These are properties of the approach, not gaps to be filled. The full list, with
 reasoning, is in [`LIMITATIONS.md`](../LIMITATIONS.md).
 
-- **Your prompt is not protected.** If you ask *"what is Andrea's salary?"*, the
+- **Your prompt is not protected.** If you ask *"what is James's salary?"*, the
   name and the intent go to the provider. Only the answer is hidden.
 - **The model cannot judge a hidden value.** *"Who earns more"* works. *"Is this
   a competitive salary for Milan?"* cannot — that needs seeing the number.

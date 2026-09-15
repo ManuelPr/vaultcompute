@@ -1,7 +1,7 @@
 """Interactive demo — Claude answering an HR question through VaultCompute.
 
 Run with:
-    uv run --extra demo python examples/demo_chat.py "Who earns more, Manuel Pernigotto or Andrea Tuscano?"
+    uv run --extra demo python examples/demo_chat.py "Who earns more, John Smith or James Brown?"
 
 Requires ANTHROPIC_API_KEY in the environment.
 """
@@ -136,7 +136,7 @@ async def _amain(question: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("question", nargs="?", default="Who earns more, Manuel Pernigotto or Andrea Tuscano?")
+    parser.add_argument("question", nargs="?", default="Who earns more, John Smith or James Brown?")
     args = parser.parse_args()
     asyncio.run(_amain(args.question))
 

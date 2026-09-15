@@ -11,7 +11,7 @@ Use it when an agent needs to filter, sort or aggregate private records without
 putting those records in the model's context. Your application still owns tool
 access, user authorization and the conversation loop.
 
-**Status: alpha ([`0.1.0a1` on PyPI](https://pypi.org/project/vaultcompute/0.1.0a1/)).** The library, MCP proxy, token stores and host adapters
+**Status: alpha ([`0.1.0a2` on PyPI](https://pypi.org/project/vaultcompute/0.1.0a2/)).** The library, MCP proxy, token stores and host adapters
 are implemented. Host integrations are version-sensitive; test their supported
 result shapes before relying on them. See [limitations](https://github.com/ManuelPr/vaultcompute/blob/main/LIMITATIONS.md).
 
@@ -41,7 +41,7 @@ model; it is not a safe boundary against malicious code or prompt injection.
 With Python 3.11+, install the published alpha in your Python environment:
 
 ```bash
-python -m pip install "vaultcompute==0.1.0a1"
+python -m pip install "vaultcompute==0.1.0a2"
 ```
 
 Save the complete example below as `quickstart.py` and run `python quickstart.py`.
@@ -75,8 +75,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 def list_employees():
     return {"employees": [
-        {"name": "Manuel", "salary": 62000},
-        {"name": "Andrea", "salary": 71000},
+        {"name": "John", "salary": 62000},
+        {"name": "James", "salary": 71000},
     ]}
 
 
@@ -120,7 +120,7 @@ print("User sees:", session.render_final_answer(model_answer))
 The first two lines contain placeholders. The last line shows:
 
 ```text
-User sees: Highest-paid employee: [{"name": "Andrea", "salary": 71000}]
+User sees: Highest-paid employee: [{"name": "James", "salary": 71000}]
 ```
 
 In a real integration, add `session.model_instructions` to the system prompt,

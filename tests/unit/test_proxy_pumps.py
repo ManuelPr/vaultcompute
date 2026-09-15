@@ -161,14 +161,14 @@ async def test_a_declared_resource_is_tokenized(resource_state):
 
     written = []
     await _pump_child_to_client(
-        _FakeChild([_read_response(uri, json.dumps({"name": "Andrea", "salary": 71000}))]),
+        _FakeChild([_read_response(uri, json.dumps({"name": "James", "salary": 71000}))]),
         written.append,
         resource_state,
     )
 
     out = json.loads(written[0])["result"]["contents"][0]["text"]
     assert "71000" not in out
-    assert json.loads(out)["name"] == "Andrea"
+    assert json.loads(out)["name"] == "James"
     assert json.loads(out)["salary"].startswith("⟦tok_")
 
 
@@ -194,7 +194,7 @@ async def test_the_uri_on_the_returned_part_wins_over_the_requested_one(resource
 
     written = []
     await _pump_child_to_client(
-        _FakeChild([_read_response("file:///hr/andrea.json", json.dumps({"salary": 71000}))]),
+        _FakeChild([_read_response("file:///hr/james.json", json.dumps({"salary": 71000}))]),
         written.append,
         resource_state,
     )
@@ -251,7 +251,7 @@ async def test_the_placeholder_reaches_the_model_unescaped(salary_state):
     # dump leaves the model looking at the literal characters \u27e6tok_…\u27e7.
     # Copy that into an answer and TOKEN_PATTERN matches nothing: the user gets
     # an escape sequence where a value should be.
-    text = await _tokenized_text(salary_state, {"name": "Andrea", "salary": 71000})
+    text = await _tokenized_text(salary_state, {"name": "James", "salary": 71000})
 
     assert "⟦tok_" in text
     # "u27e6" cannot occur any other way, and asserting on it needs no
@@ -261,8 +261,8 @@ async def test_the_placeholder_reaches_the_model_unescaped(salary_state):
 
 
 async def test_a_tokenized_result_still_parses_as_json(salary_state):
-    text = await _tokenized_text(salary_state, {"name": "Andrea", "salary": 71000})
-    assert json.loads(text)["name"] == "Andrea"
+    text = await _tokenized_text(salary_state, {"name": "James", "salary": 71000})
+    assert json.loads(text)["name"] == "James"
 
 
 async def _protected_response(state, content):
@@ -280,7 +280,7 @@ async def _protected_response(state, content):
 
 async def test_protected_non_json_text_is_blocked_without_echoing_it(salary_state):
     out = await _protected_response(
-        salary_state, [{"type": "text", "text": "Andrea earns 71000"}]
+        salary_state, [{"type": "text", "text": "James earns 71000"}]
     )
     assert "error" in out
     assert "71000" not in json.dumps(out)

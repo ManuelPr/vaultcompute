@@ -11,8 +11,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 def list_employees():
     return {"employees": [
-        {"name": "Manuel", "salary": 62000},
-        {"name": "Andrea", "salary": 71000},
+        {"name": "John", "salary": 62000},
+        {"name": "James", "salary": 71000},
     ]}
 
 

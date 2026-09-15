@@ -11,7 +11,7 @@ NER detection alone is not a complete feature and must not be presented as a
 privacy boundary. Consider:
 
 ```text
-user: What is Andrea Tuscano's salary?
+user: What is James Brown's salary?
 model sees: What is ⟦tok_…⟧'s salary?
 model calls: get_salary(name="⟦tok_…⟧")
 ```
@@ -40,7 +40,7 @@ user prompt
 1. A detector adapter, not a detector hidden in core. Deployments must be able
    to choose a local NER engine and language model.
 2. Span validation: offsets must be in range, non-empty and non-overlapping.
-3. Longest-span-first replacement so `Andrea Tuscano` is not split into two
+3. Longest-span-first replacement so `James Brown` is not split into two
    unrelated identities.
 4. Same-session resolution at the trusted tool-input boundary, with an explicit
    allow-list of arguments that may contain inbound placeholders.

@@ -107,13 +107,13 @@ def test_arbitrary_python_requires_explicit_config_opt_in(store):
 
 
 def test_tokenize_then_compute_then_reveal(store, config):
-    andrea = _tokenize(store, config, 71000)
-    manuel = _tokenize(store, config, 62000)
+    james = _tokenize(store, config, 71000)
+    john = _tokenize(store, config, 62000)
 
     derived = _compute(
         {
-            "code": f"result = 'Andrea' if resolve('{andrea}') > resolve('{manuel}') else 'Manuel'",
-            "inputs": [andrea, manuel],
+            "code": f"result = 'James' if resolve('{james}') > resolve('{john}') else 'John'",
+            "inputs": [james, john],
         },
         config,
         store,
@@ -121,14 +121,14 @@ def test_tokenize_then_compute_then_reveal(store, config):
 
     # The model gets a placeholder back, not an answer.
     assert derived.startswith("⟦tok_")
-    assert derived not in (andrea, manuel)
+    assert derived not in (james, john)
 
     shown = hooks.handle_message_display(
         {"session_id": SESSION, "delta": f"The higher earner is {derived}."},
         store=store,
         policy=SessionBoundPolicy(),
     )
-    assert shown["hookSpecificOutput"]["displayContent"] == "The higher earner is Andrea."
+    assert shown["hookSpecificOutput"]["displayContent"] == "The higher earner is James."
 
 
 def test_derived_token_lands_in_the_session_that_can_reveal_it(store, config):

@@ -12,17 +12,17 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 _SALARIES: dict[str, int] = {
-    "Manuel Pernigotto": 62000,
-    "Andrea Tuscano": 71000,
-    "Maria Rossi": 55000,
+    "John Smith": 62000,
+    "James Brown": 71000,
+    "Emily Johnson": 55000,
 }
 
 _EMPLOYEES: list[dict] = [
-    {"name": "Manuel Pernigotto", "salary": 62000, "dept": "Engineering"},
-    {"name": "Andrea Tuscano", "salary": 71000, "dept": "Engineering"},
-    {"name": "Maria Rossi", "salary": 55000, "dept": "Sales"},
-    {"name": "Luca Bianchi", "salary": 48000, "dept": "Sales"},
-    {"name": "Giulia Verdi", "salary": 83000, "dept": "Engineering"},
+    {"name": "John Smith", "salary": 62000, "dept": "Engineering"},
+    {"name": "James Brown", "salary": 71000, "dept": "Engineering"},
+    {"name": "Emily Johnson", "salary": 55000, "dept": "Sales"},
+    {"name": "Michael Wilson", "salary": 48000, "dept": "Sales"},
+    {"name": "Sarah Miller", "salary": 83000, "dept": "Engineering"},
 ]
 
 

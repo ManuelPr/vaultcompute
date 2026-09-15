@@ -168,7 +168,7 @@ def main() -> int:
             "--max-turns",
             "3",
             (
-                "Call the hr get_salary tool for Andrea Tuscano exactly once. "
+                "Call the hr get_salary tool for James Brown exactly once. "
                 "Then answer with the returned salary placeholder verbatim."
             ),
         ]

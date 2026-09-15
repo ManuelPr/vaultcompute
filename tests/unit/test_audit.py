@@ -44,7 +44,7 @@ def _store_with(*values, session: str = SESSION, semantic: str | None = "salary"
 
 def test_a_transcript_holding_only_placeholders_is_clean():
     store, [token] = _store_with(71000)
-    report = audit(f"Andrea earns {token}.", store, SESSION)
+    report = audit(f"James earns {token}.", store, SESSION)
 
     assert report.clean
     assert report.records == 1
@@ -65,9 +65,9 @@ def test_a_value_in_the_transcript_is_reported_with_its_token():
 
 def test_every_cell_of_a_hidden_table_is_checked():
     # A collective token hides a list; a leak can be any one cell of it.
-    rows = [{"name": "Andrea Tuscano", "salary": 71000}, {"name": "Maria Rossi", "salary": 55000}]
+    rows = [{"name": "James Brown", "salary": 71000}, {"name": "Emily Johnson", "salary": 55000}]
     store, _ = _store_with(rows)
-    assert not audit("...Maria Rossi...", store, SESSION).clean
+    assert not audit("...Emily Johnson...", store, SESSION).clean
     assert not audit("...55000...", store, SESSION).clean
     assert audit("nothing to see", store, SESSION).clean
 
@@ -105,7 +105,7 @@ def test_an_empty_vault_says_so_rather_than_claiming_success():
 
 
 def test_a_vault_with_records_but_no_placeholders_says_so():
-    store, _ = _store_with("Andrea Tuscano")
+    store, _ = _store_with("James Brown")
     report = audit("an unrelated conversation", store, SESSION)
     assert "wrong transcript" in report.render()
 
@@ -171,17 +171,17 @@ def test_a_literal_the_model_wrote_into_compute_code_is_not_a_leak():
     # The model already knew the name — it typed it itself, choosing between
     # two known names based on a hidden salary comparison. The token wraps
     # the choice, not the name.
-    store, token = _store_with_compute_result("Andrea Tuscano")
+    store, token = _store_with_compute_result("James Brown")
     transcript = (
         '{"type":"tool_use","name":"vault_compute","input":'
-        '{"code":"result = \'Andrea Tuscano\' if resolve(\'tok_a\') > resolve(\'tok_b\') '
-        'else \'Manuel Pernigotto\'","inputs":["tok_a","tok_b"]}}'
-        f' ...later the screen shows {token} resolved as Andrea Tuscano...'
+        '{"code":"result = \'James Brown\' if resolve(\'tok_a\') > resolve(\'tok_b\') '
+        'else \'John Smith\'","inputs":["tok_a","tok_b"]}}'
+        f' ...later the screen shows {token} resolved as James Brown...'
     )
     report = audit(transcript, store, SESSION)
     assert report.clean
     assert len(report.explained) == 1
-    assert report.explained[0].value == "Andrea Tuscano"
+    assert report.explained[0].value == "James Brown"
     assert "matched but explained" in report.render()
 
 

@@ -112,7 +112,7 @@ async def mode_a(config_path: Path) -> None:
                 print(f"        {line}")
 
             step("2", "A single value: the model asks for a salary")
-            result = await session.call_tool("get_salary", {"name": "Andrea Tuscano"})
+            result = await session.call_tool("get_salary", {"name": "James Brown"})
             tokenized = result.content[0].text
             show("what the model sees", tokenized)
             token = json.loads(tokenized)["salary"]
@@ -144,7 +144,7 @@ async def mode_a(config_path: Path) -> None:
                 "      Zed do not know it exists, so under them the user would read the\n"
                 "      placeholder below instead of the values."
             )
-            print(f"\n      the model's answer : Top earners: {top}. Andrea earns {token}.")
+            print(f"\n      the model's answer : Top earners: {top}. James earns {token}.")
             print("      (a normal client would stop here and show exactly that)")
 
     print("\n      Nothing above ever contained 71000 or 83000.")
@@ -199,23 +199,23 @@ async def mode_b(config_path: Path) -> None:
             show("tools passed to the LLM", [t["name"] for t in tools])
 
             step("4", "Protect every tool result before feeding it back")
-            call = await session.call_tool("get_salary", {"name": "Manuel Pernigotto"})
+            call = await session.call_tool("get_salary", {"name": "John Smith"})
             payload = json.loads(call.content[0].text)
             show("what the tool really returned", payload)
             tokenized = vaultcompute_session.protect_tool_result("get_salary", payload)
             show("what you feed the model", tokenized)
-            manuel = tokenized["salary"]
+            john = tokenized["salary"]
 
-            call = await session.call_tool("get_salary", {"name": "Andrea Tuscano"})
-            andrea = vaultcompute_session.protect_tool_result(
+            call = await session.call_tool("get_salary", {"name": "James Brown"})
+            james = vaultcompute_session.protect_tool_result(
                 "get_salary", json.loads(call.content[0].text)
             )["salary"]
 
             step("5a", "Route the model's compute call")
             derived = vault_compute.handle_vault_compute(
                 {
-                    "code": f"result = 'Andrea' if resolve({andrea!r}) > resolve({manuel!r}) else 'Manuel'",
-                    "inputs": [andrea, manuel],
+                    "code": f"result = 'James' if resolve({james!r}) > resolve({john!r}) else 'John'",
+                    "inputs": [james, john],
                 },
                 store=store, policy=policy, sandbox=sandbox,
                 session_id=session_id, ttl_seconds=3600,
@@ -223,7 +223,7 @@ async def mode_b(config_path: Path) -> None:
             show("answer to the model", derived)
 
             step("5b", "Rehydrate before display — this is the step Mode A cannot do")
-            answer = f"{derived} earns more: {andrea} against {manuel}."
+            answer = f"{derived} earns more: {james} against {john}."
             show("the model wrote", answer)
             show("the user reads", vaultcompute_session.render_final_answer(answer))
 
@@ -273,9 +273,9 @@ async def mode_c(workdir: Path) -> None:
             "session_id": "S1",
             "tool_name": "list_employees",
             "tool_output": json.dumps({"employees": [
-                {"name": "Andrea Tuscano", "salary": 71000, "dept": "Engineering"},
-                {"name": "Giulia Verdi", "salary": 83000, "dept": "Engineering"},
-                {"name": "Maria Rossi", "salary": 55000, "dept": "Sales"},
+                {"name": "James Brown", "salary": 71000, "dept": "Engineering"},
+                {"name": "Sarah Miller", "salary": 83000, "dept": "Engineering"},
+                {"name": "Emily Johnson", "salary": 55000, "dept": "Sales"},
             ]}),
         },
         config_path,

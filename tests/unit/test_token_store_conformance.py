@@ -68,7 +68,7 @@ def test_put_then_get_returns_an_equal_record(store):
     [
         (62000, "number"),
         (0.1 + 0.2, "number"),
-        ("Andrea Tuscano", "string"),
+        ("James Brown", "string"),
         (True, "boolean"),
         (None, "object"),
         ({"street": "1 rd", "city": "X"}, "object"),
@@ -275,8 +275,8 @@ def test_sqlite_is_shared_between_two_open_connections(tmp_path):
     tokenizer = SQLiteTokenStore(path)
     rehydrator = SQLiteTokenStore(path)
     try:
-        tokenizer.put(_rec("⟦tok_00000001⟧", value="Andrea Tuscano"))
-        assert rehydrator.resolve("⟦tok_00000001⟧") == "Andrea Tuscano"
+        tokenizer.put(_rec("⟦tok_00000001⟧", value="James Brown"))
+        assert rehydrator.resolve("⟦tok_00000001⟧") == "James Brown"
     finally:
         tokenizer.close()
         rehydrator.close()

@@ -221,7 +221,7 @@ def test_a_path_that_simply_does_not_match_is_still_a_silent_no_op():
     # Defensive declaration must stay free: "did not match this response" is
     # not the same as "could never match anything".
     store = MemoryTokenStore()
-    payload = {"name": "Andrea"}
+    payload = {"name": "James"}
     result = tokenize_result(
         payload, "hr.get", [SchemaField(path="$.absent.deeply")], store, "s", TTL
     )
